@@ -70,3 +70,28 @@ def test_app_starts_and_login_shows_navigation(tmp_path: Path, monkeypatch) -> N
     ).run(timeout=30)
     assert not detail.exception
     make_engine.cache_clear()
+
+
+def test_first_admin_can_be_created_from_deployment_secrets(tmp_path: Path, monkeypatch) -> None:
+    url = f"sqlite:///{(tmp_path / 'bootstrap.sqlite').as_posix()}"
+    monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setenv("INITIAL_ADMIN_NAME", "Gestor Inicial")
+    monkeypatch.setenv("INITIAL_ADMIN_EMAIL", "gestor@example.com")
+    monkeypatch.setenv("INITIAL_ADMIN_PASSWORD", "SecureBootstrap123!")
+    make_engine.cache_clear()
+    engine = create_engine(url)
+    Base.metadata.create_all(engine)
+    app = AppTest.from_file(Path(__file__).resolve().parents[1] / "app.py").run(timeout=30)
+    assert not app.exception
+    from sqlalchemy.orm import Session
+    from sqlalchemy import select
+    from db.models import User
+    from services.auth_service import passwords
+
+    with Session(engine) as session:
+        users = session.scalars(select(User)).all()
+        assert len(users) == 1
+        assert users[0].role == "ADMIN"
+        assert users[0].email == "gestor@example.com"
+        assert passwords.verify("SecureBootstrap123!", users[0].password_hash)
+    make_engine.cache_clear()

@@ -39,6 +39,17 @@ Sem `DATABASE_URL`, o Alembic interrompe a execução. Ele não cria um banco lo
 
 O comando `db.seed` pede a senha de modo interativo. São necessários ao menos 12 caracteres e, pelo limite do bcrypt, no máximo 72 bytes em UTF-8. Se o banco estiver vazio, a interface mostra como criar o administrador e não libera acesso anônimo. Tabelas são criadas **apenas pelas migrations**, nunca ao abrir o Streamlit.
 
+No Streamlit Community Cloud, após executar as migrations uma vez, configure também estes Secrets de nível raiz para criar o primeiro administrador automaticamente:
+
+```toml
+DATABASE_URL = "postgresql+psycopg://USUARIO:SENHA@HOST/BANCO?sslmode=require"
+INITIAL_ADMIN_NAME = "Administrador"
+INITIAL_ADMIN_EMAIL = "seu-email@empresa.com"
+INITIAL_ADMIN_PASSWORD = "uma-senha-forte-de-12-ou-mais-caracteres"
+```
+
+O sistema só utiliza essas três entradas enquanto não existe usuário. Depois do primeiro login, remova `INITIAL_ADMIN_PASSWORD` dos Secrets; a senha permanece apenas como hash bcrypt no banco. Nunca envie a senha em conversas nem a salve no Git.
+
 No Linux, use `python -m venv .venv`, `pip install -r requirements.txt`, `alembic upgrade head`, `python -m db.seed ...` e `streamlit run app.py`.
 
 ## Fluxo de importação
