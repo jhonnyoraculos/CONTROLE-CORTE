@@ -158,7 +158,12 @@ def volume_page(session: Session, filters: ReportFilters, dimension: str,
         "Cliente": func.coalesce(func.nullif(Order.cliente_pdf, ""),
                                  func.nullif(service.c.cliente_origem, ""), "Não informado"),
     }
-    label = labels[dimension]
+    labels["Maquina"] = labels.get("MÃ¡quina")
+    labels["Máquina"] = labels.get("MÃ¡quina")
+    machine_label = func.coalesce(func.nullif(Machine.name, ""), "Nao informada")
+    labels["Maquina"] = machine_label
+    labels["Máquina"] = machine_label
+    label = machine_label if "quina" in dimension else labels[dimension]
     grouped = select(
         label.label("grupo"), func.count(Order.id).label("pedidos"),
         *[func.sum(func.coalesce(getattr(service.c, name), 0)).label(name)
