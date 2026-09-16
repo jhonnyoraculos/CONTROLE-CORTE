@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 from html import escape
+from pathlib import Path
 
 import streamlit as st
+
+
+LOGO_PATH = Path(__file__).resolve().parents[1] / "logo-jr.png"
 
 
 def inject_styles():
@@ -120,30 +125,54 @@ def inject_styles():
     .jr-hero-title {
       display: flex;
       align-items: center;
-      gap: .9rem;
+      gap: 1.15rem;
     }
 
     .jr-icon {
-      width: 3rem;
-      height: 3rem;
+      width: 4rem;
+      height: 4rem;
       display: grid;
       place-items: center;
-      border-radius: 13px;
+      border-radius: 14px;
       color: #fff;
       font-weight: 800;
-      background: linear-gradient(135deg, var(--jr-blue), var(--jr-cyan));
-      box-shadow: 0 12px 34px rgba(51, 126, 200, .25);
+      background: linear-gradient(135deg, #cf2734, #af1f2a);
+      box-shadow: 0 16px 34px rgba(179, 31, 42, .25);
+      overflow: hidden;
+      flex: 0 0 4rem;
+    }
+
+    .jr-icon img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+
+    .jr-title-stack {
+      display: flex;
+      flex-direction: column;
+      gap: .35rem;
+    }
+
+    .jr-brandline {
+      color: #58708a;
+      font-size: .78rem;
+      line-height: 1;
+      font-weight: 850;
+      letter-spacing: .24em;
+      text-transform: uppercase;
     }
 
     .jr-hero h1 {
-      font-size: clamp(2rem, 3vw, 2.65rem);
+      font-size: clamp(1.85rem, 2.6vw, 2.45rem);
       line-height: 1.05;
       margin: 0;
     }
 
     .jr-subtitle {
       color: var(--jr-muted);
-      margin: .9rem 0 0 4rem;
+      margin: 1rem 0 0 5.15rem;
       font-size: 1rem;
     }
 
@@ -352,6 +381,11 @@ def inject_styles():
 def page_header(title: str, subtitle: str = "", eyebrow: str = "", badge: str = "Sistema ativo",
                 icon: str = "") -> None:
     initials = escape(icon or title[:1].upper())
+    if LOGO_PATH.exists():
+        encoded = base64.b64encode(LOGO_PATH.read_bytes()).decode("ascii")
+        icon_html = f'<img src="data:image/png;base64,{encoded}" alt="JR">'
+    else:
+        icon_html = initials
     badge_html = ""
     if badge:
         badge_html = (
@@ -366,8 +400,11 @@ def page_header(title: str, subtitle: str = "", eyebrow: str = "", badge: str = 
           <div class="jr-hero-main">
             <div>
               <div class="jr-hero-title">
-                <div class="jr-icon">{initials}</div>
-                <h1>{escape(title)}</h1>
+                <div class="jr-icon">{icon_html}</div>
+                <div class="jr-title-stack">
+                  <div class="jr-brandline">JR Ferragens & Madeiras</div>
+                  <h1>{escape(title)}</h1>
+                </div>
               </div>
               {subtitle_html}
             </div>

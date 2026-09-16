@@ -107,7 +107,6 @@ def main():
     inject_styles()
     if logo_path.exists():
         st.logo(str(logo_path), size="large")
-        st.sidebar.image(str(logo_path), width=82)
     try:
         settings = get_settings()
         configured_url = settings.database_url
