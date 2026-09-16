@@ -2,13 +2,14 @@
 
 import logging
 import uuid
+from types import SimpleNamespace
 
 import streamlit as st
 from sqlalchemy import select
 
+from config.settings import get_initial_admin, get_settings
 from db.engine import session_factory
 from db.models import User
-from config.settings import get_initial_admin, get_settings
 from ui.styles import inject_styles
 from utils.logging import configure_logging, log_event
 
@@ -19,21 +20,97 @@ def _render_page(renderer, factory, user) -> None:
     except Exception:
         reference = uuid.uuid4().hex[:8]
         logging.exception("PAGE_FAILED reference=%s", reference)
-        st.error(f"Não foi possível carregar a página. Referência: {reference}")
+        st.error(f"Nao foi possivel carregar a pagina. Referencia: {reference}")
+
+
+def _login_user(factory):
+    user_id = st.session_state.get("user_id")
+    with factory() as session:
+        user = session.get(User, uuid.UUID(user_id)) if user_id else None
+        if user and not user.active:
+            user = None
+    return user
+
+
+def _render_login(factory) -> None:
+    from services.auth_service import authenticate
+
+    st.title("Controle do Corte")
+    with st.form("login"):
+        email = st.text_input("E-mail")
+        password = st.text_input("Senha", type="password")
+        submitted = st.form_submit_button("Entrar", use_container_width=True)
+    if submitted:
+        try:
+            with factory() as session:
+                found = authenticate(session, email, password)
+                if found:
+                    st.session_state.user_id = str(found.id)
+                    log_event("LOGIN", user_id=found.id)
+                    st.rerun()
+        except Exception:
+            reference = uuid.uuid4().hex[:8]
+            logging.exception("LOGIN_FAILED reference=%s", reference)
+            st.error(f"Nao foi possivel validar o acesso. Referencia: {reference}")
+            return
+        st.error("E-mail ou senha invalidos.")
+
+
+def _bootstrap_admin(factory) -> bool:
+    initial_admin = get_initial_admin()
+    if initial_admin:
+        from services.auth_service import create_user
+
+        try:
+            with factory.begin() as session:
+                if session.scalar(select(User.id).limit(1)) is None:
+                    create_user(session, *initial_admin, "ADMIN")
+        except Exception:
+            logging.exception("ADMIN_BOOTSTRAP_FAILED")
+            st.error("Nao foi possivel criar o administrador inicial. Confira os Secrets de implantacao.")
+            return False
+        st.rerun()
+    st.title("Configuracao inicial")
+    st.info(
+        "Defina INITIAL_ADMIN_EMAIL e INITIAL_ADMIN_PASSWORD nos Secrets do Streamlit "
+        "ou crie o administrador pelo comando abaixo; depois atualize a pagina."
+    )
+    st.code('python -m db.seed --name "Administrador" --email "admin@empresa.com"')
+    return False
+
+
+def _current_user(factory, has_user: bool, auth_enabled: bool):
+    if not auth_enabled:
+        st.sidebar.caption("Acesso sem login")
+        return SimpleNamespace(id=None, name="Operador", role="ADMIN", active=True)
+    if not has_user:
+        _bootstrap_admin(factory)
+        return None
+    user = _login_user(factory)
+    if not user:
+        _render_login(factory)
+        return None
+    st.sidebar.caption(f"{user.name} - {user.role}")
+    if st.sidebar.button("Sair"):
+        log_event("LOGOUT", user_id=user.id)
+        st.session_state.pop("user_id", None)
+        st.rerun()
+    return user
 
 
 def main():
-    st.set_page_config(page_title="Controle do Corte", page_icon="🪚", layout="wide")
+    st.set_page_config(page_title="Controle do Corte", layout="wide")
     configure_logging()
     inject_styles()
     try:
-        configured_url = get_settings().database_url
+        settings = get_settings()
+        configured_url = settings.database_url
     except Exception:
         logging.exception("SECRETS_INVALID")
-        st.error("Não foi possível ler os Secrets do Streamlit. Confira o formato TOML.")
+        st.error("Nao foi possivel ler os Secrets do Streamlit. Confira o formato TOML.")
         return
     if not configured_url:
-        st.error("DATABASE_URL não encontrada nos Secrets do Streamlit.")
+        st.error("DATABASE_URL nao encontrada nos Secrets do Streamlit.")
         st.code('DATABASE_URL = "postgresql+psycopg://USUARIO:SENHA@HOST/BANCO?sslmode=require"')
         return
     try:
@@ -45,87 +122,42 @@ def main():
         logging.exception("DATABASE_CONNECTION_FAILED reference=%s", reference)
         sqlstate = getattr(getattr(exc, "orig", None), "sqlstate", None)
         if sqlstate == "42P01":
-            st.error("Banco conectado, mas as tabelas ainda não foram criadas.")
+            st.error("Banco conectado, mas as tabelas ainda nao foram criadas.")
             st.code("alembic upgrade head")
         else:
-            st.error(f"Não foi possível conectar ao banco. Referência: {reference}")
+            st.error(f"Nao foi possivel conectar ao banco. Referencia: {reference}")
             st.caption("Confira o Secret DATABASE_URL e o prefixo postgresql+psycopg://.")
         return
-    if not has_user:
-        initial_admin = get_initial_admin()
-        if initial_admin:
-            from services.auth_service import create_user
 
-            try:
-                with factory.begin() as session:
-                    if session.scalar(select(User.id).limit(1)) is None:
-                        create_user(session, *initial_admin, "ADMIN")
-            except Exception:
-                logging.exception("ADMIN_BOOTSTRAP_FAILED")
-                st.error("Não foi possível criar o administrador inicial. Confira os Secrets de implantação.")
-                return
-            st.rerun()
-        st.title("Configuração inicial")
-        st.info("Defina INITIAL_ADMIN_EMAIL e INITIAL_ADMIN_PASSWORD nos Secrets do Streamlit "
-                "ou crie o administrador pelo comando abaixo; depois atualize a página.")
-        st.code('python -m db.seed --name "Administrador" --email "admin@empresa.com"')
-        return
-    user_id = st.session_state.get("user_id")
-    with factory() as session:
-        user = session.get(User, uuid.UUID(user_id)) if user_id else None
-        if user and not user.active:
-            user = None
+    user = _current_user(factory, has_user, settings.auth_enabled)
     if not user:
-        from services.auth_service import authenticate
-
-        st.title("Controle do Corte")
-        with st.form("login"):
-            email = st.text_input("E-mail")
-            password = st.text_input("Senha", type="password")
-            submitted = st.form_submit_button("Entrar", use_container_width=True)
-        if submitted:
-            try:
-                with factory() as session:
-                    found = authenticate(session, email, password)
-                    if found:
-                        st.session_state.user_id = str(found.id)
-                        log_event("LOGIN", user_id=found.id)
-                        st.rerun()
-            except Exception:
-                reference = uuid.uuid4().hex[:8]
-                logging.exception("LOGIN_FAILED reference=%s", reference)
-                st.error(f"Não foi possível validar o acesso. Referência: {reference}")
-                return
-            st.error("E-mail ou senha inválidos.")
         return
-    st.sidebar.caption(f"{user.name} · {user.role}")
-    if st.sidebar.button("Sair"):
-        log_event("LOGOUT", user_id=user.id)
-        st.session_state.pop("user_id", None)
-        st.rerun()
 
     from ui import admin, dashboard, imports, orders, pending, planning, production, reports
 
-    orders_page = st.Page(lambda: _render_page(orders.render, factory, user),
-                          title="Pedidos", icon="📋", url_path="pedidos")
+    orders_page = st.Page(
+        lambda: _render_page(orders.render, factory, user),
+        title="Pedidos",
+        url_path="pedidos",
+    )
     st.session_state["orders_page"] = orders_page
-    pages = [st.Page(lambda: _render_page(dashboard.render, factory, user),
-                     title="Painel", icon="📊", url_path="painel", default=True),
-             orders_page,
-             st.Page(lambda: _render_page(production.render, factory, user),
-                     title="Fila de produção", icon="🪚", url_path="fila"),
-             st.Page(lambda: _render_page(planning.render, factory, user),
-                     title="Planejamento", icon="🗓️", url_path="planejamento"),
-             st.Page(lambda: _render_page(pending.render, factory, user),
-                     title="Pendências", icon="⚠️", url_path="pendencias"),
-             st.Page(lambda: _render_page(reports.render, factory, user),
-                     title="Relatórios", icon="📈", url_path="relatorios")]
+    pages = [
+        st.Page(
+            lambda: _render_page(dashboard.render, factory, user),
+            title="Painel",
+            url_path="painel",
+            default=True,
+        ),
+        orders_page,
+        st.Page(lambda: _render_page(production.render, factory, user), title="Fila de producao", url_path="fila"),
+        st.Page(lambda: _render_page(planning.render, factory, user), title="Planejamento", url_path="planejamento"),
+        st.Page(lambda: _render_page(pending.render, factory, user), title="Pendencias", url_path="pendencias"),
+        st.Page(lambda: _render_page(reports.render, factory, user), title="Relatorios", url_path="relatorios"),
+    ]
     if user.role in {"ADMIN", "GESTOR"}:
-        pages.append(st.Page(lambda: _render_page(imports.render, factory, user),
-                             title="Importações", icon="📥", url_path="importacoes"))
+        pages.append(st.Page(lambda: _render_page(imports.render, factory, user), title="Importacoes", url_path="importacoes"))
     if user.role == "ADMIN":
-        pages.append(st.Page(lambda: _render_page(admin.render, factory, user),
-                             title="Administração", icon="⚙️", url_path="administracao"))
+        pages.append(st.Page(lambda: _render_page(admin.render, factory, user), title="Administracao", url_path="administracao"))
     st.navigation(pages).run()
 
 

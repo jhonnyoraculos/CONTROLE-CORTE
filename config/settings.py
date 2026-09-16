@@ -11,6 +11,7 @@ load_dotenv()
 @dataclass(frozen=True)
 class Settings:
     database_url: str
+    auth_enabled: bool = False
     max_upload_mb: int = 20
     timezone: str = "America/Sao_Paulo"
 
@@ -36,10 +37,16 @@ def get_initial_admin() -> tuple[str, str, str] | None:
     return _config_value("INITIAL_ADMIN_NAME", "Administrador"), email, password
 
 
+def _config_bool(key: str, default: bool = False) -> bool:
+    value = _config_value(key, str(default)).strip().lower()
+    return value in {"1", "true", "yes", "sim", "on"}
+
+
 def get_settings() -> Settings:
     url = _config_value("DATABASE_URL")
     return Settings(
         database_url=url,
+        auth_enabled=_config_bool("AUTH_ENABLED", False),
         max_upload_mb=int(os.getenv("APP_MAX_UPLOAD_MB", "20")),
         timezone=os.getenv("APP_TIMEZONE", "America/Sao_Paulo"),
     )
