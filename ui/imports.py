@@ -19,7 +19,7 @@ from importers.normalizers import normalize_identifier
 from importers.pdf_carrinho import parse_pdf
 from services.importacao_service import ImportService, SERVICE_FIELDS
 from services.pedido_service import clear_spreadsheet_delivery_dates, set_delivery_date
-from services.route_service import check_delivery_route
+from services.route_service import allowed_weekdays_for, check_delivery_route
 from ui.styles import chips, metric_cards, page_header
 from utils.formatters import date_br, datetime_br
 
@@ -593,27 +593,41 @@ def _delivery_panel(factory, user) -> None:
     else:
         options = {f"{order.codigo_interno} - {order.cidade or 'sem cidade'} - {order.cliente_pdf or ''}": order.id
                    for order in pending}
-        with st.form("delivery_dates"):
-            selected_labels = st.multiselect("Pedidos para definir entrega", list(options), max_selections=25)
-            delivery_date = st.date_input("Data de entrega informada por quem esta fazendo",
-                                          min_value=today - timedelta(days=30),
-                                          max_value=horizon,
-                                          value=today,
-                                          format="DD/MM/YYYY")
-            preview = []
-            for label in selected_labels:
-                order = next(item for item in pending if item.id == options[label])
-                check = check_delivery_route(order.cidade, delivery_date)
-                preview.append({
-                    "Pedido": order.codigo_interno,
-                    "Cidade": order.cidade,
-                    "Data": date_br(delivery_date),
-                    "Rota": ", ".join(check.routes),
-                    "Resultado": "OK" if check.ok else check.message,
-                })
-            if preview:
-                st.dataframe(preview, hide_index=True, use_container_width=True)
-            submitted = st.form_submit_button("Salvar datas de entrega", type="primary")
+        selected_labels = st.multiselect("Pedidos para definir entrega", list(options), max_selections=25)
+        delivery_date = st.date_input("Data de entrega informada por quem esta fazendo",
+                                      min_value=today - timedelta(days=30),
+                                      max_value=horizon,
+                                      value=today,
+                                      format="DD/MM/YYYY")
+        preview = []
+        can_save_route = False
+        for label in selected_labels:
+            order = next(item for item in pending if item.id == options[label])
+            check = check_delivery_route(order.cidade, delivery_date)
+            allowed = allowed_weekdays_for(order.cidade)
+            preview.append({
+                "Pedido": order.codigo_interno,
+                "Cidade": order.cidade,
+                "Data": date_br(delivery_date),
+                "Dia escolhido": check.weekday,
+                "Pode salvar": "SIM" if check.ok else "NAO",
+                "Rota encontrada": ", ".join(check.routes) if check.routes else "-",
+                "Dias permitidos": ", ".join(allowed) if allowed else "Cidade nao encontrada",
+                "Motivo": "OK para esta rota" if check.ok else check.message,
+            })
+        if preview:
+            if all(row["Pode salvar"] == "SIM" for row in preview):
+                can_save_route = True
+                st.success("Data liberada pela rota para todos os pedidos selecionados.")
+            else:
+                st.error("Data bloqueada: pelo menos uma cidade nao pertence a rota deste dia.")
+            st.dataframe(preview, hide_index=True, use_container_width=True)
+        submitted = st.button(
+            "Salvar datas de entrega",
+            type="primary",
+            disabled=not selected_labels or not can_save_route,
+            use_container_width=True,
+        )
         if submitted:
             if not selected_labels:
                 st.error("Selecione ao menos um pedido.")
