@@ -13,7 +13,7 @@ import streamlit as st
 from sqlalchemy import select
 from sqlalchemy.orm import defer
 
-from db.models import Document, ImportError, Order, Service
+from db.models import Audit, Document, ImportError, Order, Service
 from importers.excel_servicos import parse_excel
 from importers.normalizers import normalize_identifier
 from importers.pdf_carrinho import parse_pdf
@@ -537,15 +537,31 @@ def _delivery_panel(factory, user) -> None:
     today = date.today()
     horizon = today + timedelta(days=45)
     with factory() as session:
-        pending = session.scalars(select(Order).where(
+        manual_delivery_ids = set(session.scalars(select(Audit.entity_id).where(
+            Audit.entity == "pedidos",
+            Audit.field == "previsao_entrega",
+            Audit.source == "ROTA",
+        )).all())
+        pending_candidates = session.scalars(select(Order).where(
             Order.carrinho.is_not(None),
             Order.cidade.is_not(None),
-            Order.previsao_entrega.is_(None),
         ).order_by(Order.codigo_interno).limit(200)).all()
-        upcoming = session.scalars(select(Order).where(
+        pending = [
+            order for order in pending_candidates
+            if order.previsao_entrega is None or str(order.id) not in manual_delivery_ids
+        ]
+        upcoming_candidates = session.scalars(select(Order).where(
             Order.previsao_entrega.is_not(None),
             Order.previsao_entrega >= today - timedelta(days=7),
         ).order_by(Order.previsao_entrega, Order.codigo_interno).limit(80)).all()
+        upcoming = [
+            order for order in upcoming_candidates
+            if str(order.id) in manual_delivery_ids
+        ]
+        non_manual_dates = [
+            order for order in upcoming_candidates
+            if str(order.id) not in manual_delivery_ids
+        ]
 
     metric_cards([
         ("Sem entrega", len(pending), "Pedidos com carrinho e cidade", "warn" if pending else "good"),
@@ -555,6 +571,11 @@ def _delivery_panel(factory, user) -> None:
     cleanup_count = st.session_state.pop("spreadsheet_delivery_cleanup_count", None)
     if cleanup_count is not None:
         st.success(f"{cleanup_count} data(s) vindas da planilha foram limpas. Agora devem ser definidas manualmente.")
+    if non_manual_dates:
+        st.warning(
+            f"{len(non_manual_dates)} pedido(s) tem data antiga nao confirmada manualmente. "
+            "Eles nao contam mais como entrega definida."
+        )
     cleanup_cols = st.columns([1, 3])
     with cleanup_cols[0]:
         if st.button(

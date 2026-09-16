@@ -209,6 +209,10 @@ def test_delivery_date_requires_matching_route(tmp_path):
             set_delivery_date(session, order, date(2026, 8, 17), admin.id, "ADMIN")
         set_delivery_date(session, order, date(2026, 8, 18), admin.id, "ADMIN")
         assert order.previsao_entrega == date(2026, 8, 18)
+        assert session.scalar(select(Audit).where(
+            Audit.entity_id == str(order.id),
+            Audit.source == "ROTA",
+        )) is not None
 
 
 def test_service_spreadsheet_delivery_date_is_not_order_delivery(tmp_path):
@@ -240,7 +244,9 @@ def test_clear_spreadsheet_delivery_dates_preserves_manual_dates(tmp_path):
                          previsao_entrega=date(2026, 9, 21))
         manual = Order(codigo_interno="P2", codigo_interno_normalizado="P2",
                        previsao_entrega=date(2026, 9, 22))
-        session.add_all([imported, manual])
+        old_without_audit = Order(codigo_interno="P3", codigo_interno_normalizado="P3",
+                                  previsao_entrega=date(2026, 9, 23))
+        session.add_all([imported, manual, old_without_audit])
         session.flush()
         session.add_all([
             Audit(entity="pedidos", entity_id=str(imported.id), field="previsao_entrega",
@@ -255,10 +261,34 @@ def test_clear_spreadsheet_delivery_dates_preserves_manual_dates(tmp_path):
         ])
 
     with Session(engine) as session, session.begin():
-        assert clear_spreadsheet_delivery_dates(session, None, "ADMIN") == 1
+        assert clear_spreadsheet_delivery_dates(session, None, "ADMIN") == 2
 
     with Session(engine) as session:
         imported = session.scalar(select(Order).where(Order.codigo_interno_normalizado == "P1"))
         manual = session.scalar(select(Order).where(Order.codigo_interno_normalizado == "P2"))
+        old_without_audit = session.scalar(select(Order).where(Order.codigo_interno_normalizado == "P3"))
         assert imported.previsao_entrega is None
         assert manual.previsao_entrega == date(2026, 9, 22)
+        assert old_without_audit.previsao_entrega is None
+
+
+def test_confirming_same_delivery_date_marks_it_as_manual(tmp_path):
+    engine = create_engine(f"sqlite:///{(tmp_path / 'confirm_same_delivery.sqlite').as_posix()}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session, session.begin():
+        admin = create_user(session, "Admin", "admin@example.com", "OriginalPass123!", "ADMIN")
+        order = Order(codigo_interno="D2", codigo_interno_normalizado="D2",
+                      cidade="Ponte Nova", previsao_entrega=date(2026, 8, 18))
+        session.add(order)
+        session.flush()
+        set_delivery_date(session, order, date(2026, 8, 18), admin.id, "ADMIN")
+
+    with Session(engine) as session:
+        order = session.scalar(select(Order).where(Order.codigo_interno_normalizado == "D2"))
+        audit = session.scalar(select(Audit).where(
+            Audit.entity_id == str(order.id),
+            Audit.field == "previsao_entrega",
+            Audit.source == "ROTA",
+        ))
+        assert order.previsao_entrega == date(2026, 8, 18)
+        assert audit.action == "DELIVERY_DATE_CONFIRMED"

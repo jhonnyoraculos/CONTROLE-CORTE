@@ -2,7 +2,6 @@
 
 from datetime import date
 from decimal import Decimal
-from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -42,13 +41,20 @@ def set_delivery_date(session: Session, order: Order, delivery_date: date,
     if not check.ok:
         raise ValueError(check.message)
     old = order.previsao_entrega
-    if old == delivery_date:
+    already_confirmed = session.scalar(select(Audit.id).where(
+        Audit.entity == "pedidos",
+        Audit.entity_id == str(order.id),
+        Audit.field == "previsao_entrega",
+        Audit.source == "ROTA",
+    ).limit(1)) is not None
+    if old == delivery_date and already_confirmed:
         return
     order.previsao_entrega = delivery_date
     order.updated_by = actor_id
     session.add(Audit(user_id=actor_id, entity="pedidos", entity_id=str(order.id),
                       field="previsao_entrega", old_value=None if old is None else str(old),
-                      new_value=str(delivery_date), source="ROTA", action="DELIVERY_DATE_SET"))
+                      new_value=str(delivery_date), source="ROTA",
+                      action="DELIVERY_DATE_CONFIRMED" if old == delivery_date else "DELIVERY_DATE_SET"))
 
 
 def clear_spreadsheet_delivery_dates(session: Session, actor_id, role: str) -> int:
@@ -56,30 +62,17 @@ def clear_spreadsheet_delivery_dates(session: Session, actor_id, role: str) -> i
     if role == "CONSULTA":
         raise PermissionError("Este perfil nao pode limpar datas de entrega.")
 
-    imported_ids = set(session.scalars(select(Audit.entity_id).where(
-        Audit.entity == "pedidos",
-        Audit.field == "previsao_entrega",
-        Audit.source == "PLANILHA_SERVICOS",
-    )).all())
     manual_ids = set(session.scalars(select(Audit.entity_id).where(
         Audit.entity == "pedidos",
         Audit.field == "previsao_entrega",
         Audit.source == "ROTA",
     )).all())
-    target_ids = []
-    for entity_id in imported_ids - manual_ids:
-        try:
-            target_ids.append(UUID(entity_id))
-        except (TypeError, ValueError):
-            continue
-    if not target_ids:
-        return 0
-
     orders = session.scalars(select(Order).where(
-        Order.id.in_(target_ids),
         Order.previsao_entrega.is_not(None),
     )).all()
     for order in orders:
+        if str(order.id) in manual_ids:
+            continue
         old = order.previsao_entrega
         order.previsao_entrega = None
         order.updated_by = actor_id
@@ -88,4 +81,4 @@ def clear_spreadsheet_delivery_dates(session: Session, actor_id, role: str) -> i
                           old_value=None if old is None else str(old),
                           new_value=None, source="LIMPEZA_ROTA",
                           action="DELIVERY_DATE_CLEAR"))
-    return len(orders)
+    return sum(1 for order in orders if str(order.id) not in manual_ids)
