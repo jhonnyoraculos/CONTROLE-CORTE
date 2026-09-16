@@ -517,11 +517,11 @@ def render(factory, user):
         "Sistema ativo",
         "O",
     )
-    with st.expander("Entrega por rota", expanded=True):
-        _delivery_panel(factory, user)
     with st.expander("Importar planilha de servicos", expanded=True):
         _excel_tab(factory, user, show_header=False)
     with st.expander("Importar carrinhos PDF", expanded=True):
         _pdf_tab(factory, user, show_header=False)
+    with st.expander("Entrega por rota", expanded=True):
+        _delivery_panel(factory, user)
     with st.expander("Historico de importacao", expanded=False):
         _history_tab(factory, show_header=False)
