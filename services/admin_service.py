@@ -3,11 +3,29 @@
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from config.constants import ROLES
-from db.models import AppSetting, Audit, Capacity, Machine, User
+from db.models import (
+    AppSetting,
+    Audit,
+    Capacity,
+    Document,
+    ImportBatch,
+    ImportError,
+    LegacyRecord,
+    Machine,
+    MaterialIssue,
+    Note,
+    Order,
+    OrderItem,
+    PendingLink,
+    ProductionEvent,
+    Service,
+    StatusHistory,
+    User,
+)
 from services.auth_service import passwords, require_role
 from utils.logging import log_event
 
@@ -113,3 +131,52 @@ def save_setting(session: Session, key: str, value: int, actor_id: uuid.UUID,
     else:
         session.add(AppSetting(key=key, value={"value": value}))
     _audit(session, actor_id, "configuracoes", key, "value", old, value, "SETTING_CHANGED")
+
+
+RESET_TABLES = (
+    Audit,
+    LegacyRecord,
+    ImportError,
+    PendingLink,
+    OrderItem,
+    MaterialIssue,
+    Note,
+    ProductionEvent,
+    StatusHistory,
+    Document,
+    Service,
+    ImportBatch,
+    Order,
+)
+
+
+def operational_data_counts(session: Session) -> dict[str, int]:
+    labels = {
+        Order: "pedidos",
+        Service: "servicos",
+        OrderItem: "itens",
+        Document: "documentos",
+        ImportBatch: "lotes_importacao",
+        PendingLink: "pendencias_vinculacao",
+        MaterialIssue: "pendencias_material",
+        ProductionEvent: "eventos_producao",
+        Note: "observacoes",
+        Audit: "auditoria",
+        LegacyRecord: "historico_legado",
+    }
+    return {
+        label: int(session.scalar(select(func.count()).select_from(model)) or 0)
+        for model, label in labels.items()
+    }
+
+
+def reset_operational_data(session: Session, actor_id, actor_role: str,
+                           confirmation: str) -> dict[str, int]:
+    require_role(actor_role, "admin")
+    if confirmation.strip().upper() != "ZERAR DADOS":
+        raise ValueError("Digite ZERAR DADOS para confirmar.")
+    before = operational_data_counts(session)
+    for model in RESET_TABLES:
+        session.execute(delete(model).execution_options(synchronize_session=False))
+    log_event("OPERATIONAL_DATA_RESET", user_id=actor_id)
+    return before
