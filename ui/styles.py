@@ -380,23 +380,14 @@ def page_header(title: str, subtitle: str = "", eyebrow: str = "", badge: str = 
 
 
 def metric_cards(cards: list[tuple[str, object, str, str]]) -> None:
-    rendered = []
-    for label, value, note, tone in cards:
-        rendered.append(
-            f"""
-            <div class="jr-card {escape(tone)}">
-              <div class="jr-card-label">{escape(str(label))}</div>
-              <div class="jr-card-value">{escape(str(value))}</div>
-              <div class="jr-card-note">{escape(str(note))}</div>
-            </div>
-            """
-        )
-    st.markdown(f'<div class="jr-card-grid">{"".join(rendered)}</div>', unsafe_allow_html=True)
+    for offset in range(0, len(cards), 4):
+        chunk = cards[offset:offset + 4]
+        for column, (label, value, note, _tone) in zip(st.columns(len(chunk)), chunk):
+            column.metric(str(label), str(value), help=str(note))
+            if note:
+                column.caption(str(note))
 
 
 def chips(items: list[tuple[str, str]]) -> None:
-    rendered = "".join(
-        f'<span class="jr-chip {escape(tone)}">{escape(label)}</span>'
-        for label, tone in items
-    )
-    st.markdown(f'<div class="jr-chip-row">{rendered}</div>', unsafe_allow_html=True)
+    if items:
+        st.caption("  |  ".join(label for label, _tone in items))
