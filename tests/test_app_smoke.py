@@ -35,7 +35,7 @@ def test_app_starts_without_login_by_default(tmp_path: Path, monkeypatch) -> Non
                                 message="PDF de teste"))
     app = AppTest.from_file(Path(__file__).resolve().parents[1] / "app.py").run(timeout=30)
     assert not app.exception
-    assert any(button.label == "Aplicar filtros" for button in app.button)
+    assert len(app.file_uploader) >= 2
     for module in ("orders", "production", "planning", "pending", "reports", "imports", "admin"):
         user = "SimpleNamespace(id=None, name='Operador', role='ADMIN')"
         page = AppTest.from_string(

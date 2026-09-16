@@ -133,7 +133,7 @@ def main():
     if not user:
         return
 
-    from ui import admin, dashboard, imports, orders, pending, planning, production, reports
+    from ui import admin, imports, orders
 
     orders_page = st.Page(
         lambda: _render_page(orders.render, factory, user),
@@ -143,19 +143,13 @@ def main():
     st.session_state["orders_page"] = orders_page
     pages = [
         st.Page(
-            lambda: _render_page(dashboard.render, factory, user),
-            title="Painel",
-            url_path="painel",
+            lambda: _render_page(imports.render, factory, user),
+            title="Operacao",
+            url_path="operacao",
             default=True,
         ),
         orders_page,
-        st.Page(lambda: _render_page(production.render, factory, user), title="Fila de producao", url_path="fila"),
-        st.Page(lambda: _render_page(planning.render, factory, user), title="Planejamento", url_path="planejamento"),
-        st.Page(lambda: _render_page(pending.render, factory, user), title="Pendencias", url_path="pendencias"),
-        st.Page(lambda: _render_page(reports.render, factory, user), title="Relatorios", url_path="relatorios"),
     ]
-    if user.role in {"ADMIN", "GESTOR"}:
-        pages.append(st.Page(lambda: _render_page(imports.render, factory, user), title="Importacoes", url_path="importacoes"))
     if user.role == "ADMIN":
         pages.append(st.Page(lambda: _render_page(admin.render, factory, user), title="Administracao", url_path="administracao"))
     st.navigation(pages).run()

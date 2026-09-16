@@ -6,6 +6,7 @@ import hashlib
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import date, timedelta
 
 import streamlit as st
 from sqlalchemy import select
@@ -16,8 +17,10 @@ from importers.excel_servicos import parse_excel
 from importers.normalizers import normalize_identifier
 from importers.pdf_carrinho import parse_pdf
 from services.importacao_service import ImportService, SERVICE_FIELDS
+from services.pedido_service import set_delivery_date
+from services.route_service import check_delivery_route
 from ui.styles import chips, metric_cards, page_header
-from utils.formatters import datetime_br
+from utils.formatters import date_br, datetime_br
 
 
 @dataclass(frozen=True)
@@ -112,14 +115,15 @@ def _show_excel_result(result) -> None:
             st.dataframe(result.changes[:100], hide_index=True, use_container_width=True)
 
 
-def _excel_tab(factory, user) -> None:
-    page_header(
-        "Importar servicos",
-        "Envie a planilha geral, confira o resumo e confirme a gravacao.",
-        "Importacoes",
-        "Excel",
-        "X",
-    )
+def _excel_tab(factory, user, show_header: bool = True) -> None:
+    if show_header:
+        page_header(
+            "Importar servicos",
+            "Envie a planilha geral, confira o resumo e confirme a gravacao.",
+            "Importacoes",
+            "Excel",
+            "X",
+        )
     uploaded = st.file_uploader("Planilha geral de servicos", type="xlsx", key="excel")
     if not uploaded:
         metric_cards([
@@ -264,14 +268,15 @@ def _show_pdf_outcomes(outcomes: list[dict]) -> None:
         st.dataframe(outcomes, hide_index=True, use_container_width=True)
 
 
-def _pdf_tab(factory, user) -> None:
-    page_header(
-        "Importar carrinhos",
-        "Envie um ou varios PDFs; o sistema vincula automaticamente quando encontra o pedido.",
-        "Importacoes",
-        "PDF",
-        "P",
-    )
+def _pdf_tab(factory, user, show_header: bool = True) -> None:
+    if show_header:
+        page_header(
+            "Importar carrinhos",
+            "Envie um ou varios PDFs; o sistema vincula automaticamente quando encontra o pedido.",
+            "Importacoes",
+            "PDF",
+            "P",
+        )
     files = st.file_uploader(
         "Carrinhos em PDF",
         type="pdf",
@@ -359,14 +364,15 @@ def _pdf_tab(factory, user) -> None:
         _error(exc)
 
 
-def _history_tab(factory) -> None:
-    page_header(
-        "Historico de importacao",
-        "Ultimos arquivos gravados, com detalhes sob demanda.",
-        "Auditoria",
-        "Historico",
-        "H",
-    )
+def _history_tab(factory, show_header: bool = True) -> None:
+    if show_header:
+        page_header(
+            "Historico de importacao",
+            "Ultimos arquivos gravados, com detalhes sob demanda.",
+            "Auditoria",
+            "Historico",
+            "H",
+        )
     with factory() as session:
         docs = session.scalars(select(Document).options(
             defer(Document.original_bytes)).order_by(Document.data_importacao.desc()).limit(50)).all()
@@ -428,11 +434,94 @@ def _history_tab(factory) -> None:
                 )
 
 
+def _delivery_panel(factory, user) -> None:
+    today = date.today()
+    horizon = today + timedelta(days=45)
+    with factory() as session:
+        pending = session.scalars(select(Order).where(
+            Order.carrinho.is_not(None),
+            Order.cidade.is_not(None),
+            Order.previsao_entrega.is_(None),
+        ).order_by(Order.codigo_interno).limit(200)).all()
+        upcoming = session.scalars(select(Order).where(
+            Order.previsao_entrega.is_not(None),
+            Order.previsao_entrega >= today - timedelta(days=7),
+        ).order_by(Order.previsao_entrega, Order.codigo_interno).limit(80)).all()
+
+    metric_cards([
+        ("Sem entrega", len(pending), "Pedidos com carrinho e cidade", "warn" if pending else "good"),
+        ("Ja definidos", len(upcoming), "Entregas recentes e futuras", "neutral"),
+        ("Regra", "Rota", "Cidade precisa bater com a semana", "good"),
+    ])
+    if not pending:
+        st.info("Nao ha pedidos com carrinho e cidade aguardando data de entrega.")
+    else:
+        options = {f"{order.codigo_interno} - {order.cidade or 'sem cidade'} - {order.cliente_pdf or ''}": order.id
+                   for order in pending}
+        with st.form("delivery_dates"):
+            selected_labels = st.multiselect("Pedidos para definir entrega", list(options), max_selections=25)
+            delivery_date = st.date_input("Data de entrega informada por quem esta fazendo",
+                                          min_value=today - timedelta(days=30),
+                                          max_value=horizon,
+                                          value=today,
+                                          format="DD/MM/YYYY")
+            preview = []
+            for label in selected_labels:
+                order = next(item for item in pending if item.id == options[label])
+                check = check_delivery_route(order.cidade, delivery_date)
+                preview.append({
+                    "Pedido": order.codigo_interno,
+                    "Cidade": order.cidade,
+                    "Data": date_br(delivery_date),
+                    "Rota": ", ".join(check.routes),
+                    "Resultado": "OK" if check.ok else check.message,
+                })
+            if preview:
+                st.dataframe(preview, hide_index=True, use_container_width=True)
+            submitted = st.form_submit_button("Salvar datas de entrega", type="primary")
+        if submitted:
+            if not selected_labels:
+                st.error("Selecione ao menos um pedido.")
+                return
+            saved = []
+            blocked = []
+            with factory.begin() as tx:
+                for label in selected_labels:
+                    order = tx.get(Order, options[label])
+                    try:
+                        set_delivery_date(tx, order, delivery_date, user.id, user.role)
+                        saved.append(order.codigo_interno)
+                    except (PermissionError, ValueError) as exc:
+                        blocked.append({"Pedido": order.codigo_interno, "Motivo": str(exc)})
+            if saved:
+                st.success(f"Entrega definida para {len(saved)} pedido(s): {', '.join(saved[:10])}.")
+            if blocked:
+                st.error("Alguns pedidos nao foram salvos porque nao batem com a rota.")
+                st.dataframe(blocked, hide_index=True, use_container_width=True)
+            if saved and not blocked:
+                st.rerun()
+    if upcoming:
+        with st.expander("Entregas ja definidas", expanded=False):
+            st.dataframe([
+                {"Pedido": order.codigo_interno, "Cidade": order.cidade,
+                 "Entrega": date_br(order.previsao_entrega), "Cliente": order.cliente_pdf}
+                for order in upcoming
+            ], hide_index=True, use_container_width=True)
+
+
 def render(factory, user):
-    excel_tab, pdf_tab, history_tab = st.tabs(["Excel", "PDF", "Historico"])
-    with excel_tab:
-        _excel_tab(factory, user)
-    with pdf_tab:
-        _pdf_tab(factory, user)
-    with history_tab:
-        _history_tab(factory)
+    page_header(
+        "Operacao do corte",
+        "Importe arquivos, confira vinculos e defina entregas pela rota planejada.",
+        "Fluxo principal",
+        "Sistema ativo",
+        "O",
+    )
+    with st.expander("Entrega por rota", expanded=True):
+        _delivery_panel(factory, user)
+    with st.expander("Importar planilha de servicos", expanded=True):
+        _excel_tab(factory, user, show_header=False)
+    with st.expander("Importar carrinhos PDF", expanded=True):
+        _pdf_tab(factory, user, show_header=False)
+    with st.expander("Historico de importacao", expanded=False):
+        _history_tab(factory, show_header=False)

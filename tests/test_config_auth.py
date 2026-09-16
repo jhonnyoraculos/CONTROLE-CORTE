@@ -40,7 +40,9 @@ from services.admin_service import (
 )
 from services.auth_service import create_user, passwords
 from services.note_service import add_note
+from services.pedido_service import set_delivery_date
 from services.producao_service import record_event
+from services.route_service import check_delivery_route, normalize_city
 from services.status_flow import get_flow, get_shifts, save_flow, save_shifts, save_statuses
 
 
@@ -53,6 +55,13 @@ def test_neon_database_url_is_accepted_as_copied() -> None:
     assert normalize_database_url(explicit) == explicit
     sqlite = "sqlite:///local.sqlite"
     assert normalize_database_url(sqlite) == sqlite
+
+
+def test_route_spreadsheet_validates_city_by_weekday() -> None:
+    assert normalize_city("Divinópolis (R.10)") == "DIVINOPOLIS"
+    assert check_delivery_route("Divinópolis", date(2026, 8, 17)).ok
+    assert check_delivery_route("Ponte Nova", date(2026, 8, 18)).ok
+    assert not check_delivery_route("Ponte Nova", date(2026, 8, 17)).ok
 
 
 def test_admin_configured_flow_and_service_permissions(tmp_path):
@@ -183,3 +192,17 @@ def test_admin_reset_requires_confirmation_and_permission(tmp_path):
             reset_operational_data(session, admin.id, "ADMIN", "apagar")
         with pytest.raises(PermissionError):
             reset_operational_data(session, viewer.id, "CONSULTA", "ZERAR DADOS")
+
+
+def test_delivery_date_requires_matching_route(tmp_path):
+    engine = create_engine(f"sqlite:///{(tmp_path / 'delivery.sqlite').as_posix()}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session, session.begin():
+        admin = create_user(session, "Admin", "admin@example.com", "OriginalPass123!", "ADMIN")
+        order = Order(codigo_interno="D1", codigo_interno_normalizado="D1", cidade="Ponte Nova")
+        session.add(order)
+        session.flush()
+        with pytest.raises(ValueError, match="rota"):
+            set_delivery_date(session, order, date(2026, 8, 17), admin.id, "ADMIN")
+        set_delivery_date(session, order, date(2026, 8, 18), admin.id, "ADMIN")
+        assert order.previsao_entrega == date(2026, 8, 18)
