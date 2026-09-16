@@ -5,12 +5,24 @@ from sqlalchemy.orm import Session
 import pytest
 
 from config.constants import PRODUCTION_STATUSES
+from config.settings import normalize_database_url
 from db.models import Audit, Base, Order, User
 from services.admin_service import create_machine, save_setting, update_machine, update_user
 from services.auth_service import create_user, passwords
 from services.note_service import add_note
 from services.producao_service import record_event
 from services.status_flow import get_flow, get_shifts, save_flow, save_shifts, save_statuses
+
+
+def test_neon_database_url_is_accepted_as_copied() -> None:
+    raw = "postgresql://user:pass@example.neon.tech/db?sslmode=require"
+    assert normalize_database_url(raw) == (
+        "postgresql+psycopg://user:pass@example.neon.tech/db?sslmode=require"
+    )
+    explicit = "postgresql+psycopg://user:pass@example.neon.tech/db?sslmode=require"
+    assert normalize_database_url(explicit) == explicit
+    sqlite = "sqlite:///local.sqlite"
+    assert normalize_database_url(sqlite) == sqlite
 
 
 def test_admin_configured_flow_and_service_permissions(tmp_path):

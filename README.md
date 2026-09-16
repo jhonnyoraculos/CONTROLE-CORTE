@@ -22,7 +22,7 @@ Copy-Item .env.example .env
 No `.env` local:
 
 ```dotenv
-DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST/DB?sslmode=require&channel_binding=require
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/DB?sslmode=require&channel_binding=require
 APP_MAX_UPLOAD_MB=20
 APP_TIMEZONE=America/Sao_Paulo
 ```
@@ -30,10 +30,10 @@ APP_TIMEZONE=America/Sao_Paulo
 No Streamlit Cloud, use somente este Secret para abrir o app sem login:
 
 ```toml
-DATABASE_URL = "postgresql+psycopg://USUARIO:SENHA@HOST/BANCO?sslmode=require&channel_binding=require"
+DATABASE_URL = "postgresql://USUARIO:SENHA@HOST/BANCO?sslmode=require&channel_binding=require"
 ```
 
-A URL copiada do Neon geralmente comeca com `postgresql://`; neste app, troque para `postgresql+psycopg://`.
+Cole a URL exatamente como o Neon fornece. O app converte internamente para o driver Python instalado.
 Nao salve URLs reais, senhas, `.env` ou `.streamlit/secrets.toml` no Git.
 
 ## Banco

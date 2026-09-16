@@ -37,6 +37,14 @@ def get_initial_admin() -> tuple[str, str, str] | None:
     return _config_value("INITIAL_ADMIN_NAME", "Administrador"), email, password
 
 
+def normalize_database_url(url: str) -> str:
+    """Accept Neon URLs as copied and select the installed psycopg driver."""
+    clean = url.strip()
+    if clean.startswith("postgresql://"):
+        return "postgresql+psycopg://" + clean.removeprefix("postgresql://")
+    return clean
+
+
 def _config_bool(key: str, default: bool = False) -> bool:
     value = _config_value(key, str(default)).strip().lower()
     return value in {"1", "true", "yes", "sim", "on"}
@@ -45,7 +53,7 @@ def _config_bool(key: str, default: bool = False) -> bool:
 def get_settings() -> Settings:
     url = _config_value("DATABASE_URL")
     return Settings(
-        database_url=url,
+        database_url=normalize_database_url(url),
         auth_enabled=_config_bool("AUTH_ENABLED", False),
         max_upload_mb=int(os.getenv("APP_MAX_UPLOAD_MB", "20")),
         timezone=os.getenv("APP_TIMEZONE", "America/Sao_Paulo"),

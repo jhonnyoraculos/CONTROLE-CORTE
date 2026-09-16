@@ -111,7 +111,7 @@ def main():
         return
     if not configured_url:
         st.error("DATABASE_URL nao encontrada nos Secrets do Streamlit.")
-        st.code('DATABASE_URL = "postgresql+psycopg://USUARIO:SENHA@HOST/BANCO?sslmode=require"')
+        st.code('DATABASE_URL = "postgresql://USUARIO:SENHA@HOST/BANCO?sslmode=require"')
         return
     try:
         factory = session_factory()
@@ -126,7 +126,7 @@ def main():
             st.code("alembic upgrade head")
         else:
             st.error(f"Nao foi possivel conectar ao banco. Referencia: {reference}")
-            st.caption("Confira o Secret DATABASE_URL e o prefixo postgresql+psycopg://.")
+            st.caption("Confira se o Secret DATABASE_URL esta igual ao painel do Neon.")
         return
 
     user = _current_user(factory, has_user, settings.auth_enabled)
