@@ -2,6 +2,7 @@
 
 import logging
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 
 import streamlit as st
@@ -99,9 +100,14 @@ def _current_user(factory, has_user: bool, auth_enabled: bool):
 
 
 def main():
-    st.set_page_config(page_title="Controle do Corte", layout="wide")
+    logo_path = Path(__file__).with_name("logo-jr.png")
+    page_icon = str(logo_path) if logo_path.exists() else None
+    st.set_page_config(page_title="Controle do Corte", page_icon=page_icon, layout="wide")
     configure_logging()
     inject_styles()
+    if logo_path.exists():
+        st.logo(str(logo_path), size="large")
+        st.sidebar.image(str(logo_path), width=82)
     try:
         settings = get_settings()
         configured_url = settings.database_url
