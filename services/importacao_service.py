@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import delete, func, select, text as sql_text
+from sqlalchemy import delete, select, text as sql_text
 from sqlalchemy.orm import Session
 
 from config.settings import get_settings
@@ -207,7 +207,6 @@ class ImportService:
             self.session.add(ImportError(documento_id=doc.id, linha=issue.get("row"),
                                          severity="ERRO", message=issue.get("message", str(issue)),
                                          raw_data=_jsonable(issue)))
-        affected_orders: set[uuid.UUID] = set()
         for row in sorted(parsed.rows, key=lambda entry: (entry.order_code, entry.service_code)):
             if row.raw_data.get("_needs_order_review"):
                 result.ignored += 1
@@ -230,7 +229,6 @@ class ImportService:
                 result.orders_created += 1
                 _audit(self.session, "pedidos", order.id, "codigo_interno", None,
                        row.order_code, "PLANILHA_SERVICOS", "CREATE", self.user_id, doc.id)
-            affected_orders.add(order.id)
             service = self.session.scalar(select(Service).where(
                 Service.pedido_id == order.id,
                 Service.codigo_servico_normalizado == row.service_code))
@@ -256,15 +254,11 @@ class ImportService:
                     result.changes.extend(f"{row.service_code} {c}" for c in changes)
                 else:
                     result.ignored += 1
-        for order_id in affected_orders:
-            order = self.session.get(Order, order_id)
-            earliest = self.session.scalar(select(func.min(Service.previsao_entrega)).where(
-                Service.pedido_id == order_id))
-            if earliest != order.previsao_entrega:
-                old = order.previsao_entrega
-                order.previsao_entrega = earliest
-                _audit(self.session, "pedidos", order.id, "previsao_entrega", old,
-                       order.previsao_entrega, "PLANILHA_SERVICOS", "UPDATE", self.user_id, doc.id)
+        if any(row.fields.get("previsao_entrega") for row in parsed.rows):
+            result.warnings.append(
+                "A coluna Previsao Entrega da planilha foi guardada apenas no servico; "
+                "a entrega oficial do pedido deve ser definida manualmente pela rota."
+            )
         doc.status = "IMPORTADO_COM_ERROS" if parsed.errors else "IMPORTADO"
         result.status = doc.status
         doc.quantidade_registros = len(parsed.rows) + len(parsed.errors)

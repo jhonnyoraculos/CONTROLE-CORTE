@@ -2,7 +2,9 @@
 
 from datetime import date
 from decimal import Decimal
+from io import BytesIO
 
+from openpyxl import Workbook
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 import pytest
@@ -39,8 +41,9 @@ from services.admin_service import (
     update_user,
 )
 from services.auth_service import create_user, passwords
+from services.importacao_service import ImportService
 from services.note_service import add_note
-from services.pedido_service import set_delivery_date
+from services.pedido_service import clear_spreadsheet_delivery_dates, set_delivery_date
 from services.producao_service import record_event
 from services.route_service import check_delivery_route, normalize_city
 from services.status_flow import get_flow, get_shifts, save_flow, save_shifts, save_statuses
@@ -206,3 +209,56 @@ def test_delivery_date_requires_matching_route(tmp_path):
             set_delivery_date(session, order, date(2026, 8, 17), admin.id, "ADMIN")
         set_delivery_date(session, order, date(2026, 8, 18), admin.id, "ADMIN")
         assert order.previsao_entrega == date(2026, 8, 18)
+
+
+def test_service_spreadsheet_delivery_date_is_not_order_delivery(tmp_path):
+    engine = create_engine(f"sqlite:///{(tmp_path / 'forecast.sqlite').as_posix()}")
+    Base.metadata.create_all(engine)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["Servico", "Codigo Interno", "Cliente", "Chapas", "Cortes", "Previsao Entrega"])
+    sheet.append(["S1", "P1", "Cliente teste", 1, 2, date(2026, 9, 21)])
+    stream = BytesIO()
+    workbook.save(stream)
+    workbook.close()
+
+    with Session(engine) as session, session.begin():
+        ImportService(session, None, "ADMIN").import_excel("servicos.xlsx", stream.getvalue())
+
+    with Session(engine) as session:
+        order = session.scalar(select(Order).where(Order.codigo_interno_normalizado == "P1"))
+        service = session.scalar(select(Service).where(Service.codigo_servico_normalizado == "S1"))
+        assert order.previsao_entrega is None
+        assert service.previsao_entrega == date(2026, 9, 21)
+
+
+def test_clear_spreadsheet_delivery_dates_preserves_manual_dates(tmp_path):
+    engine = create_engine(f"sqlite:///{(tmp_path / 'clear_forecast.sqlite').as_posix()}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session, session.begin():
+        imported = Order(codigo_interno="P1", codigo_interno_normalizado="P1",
+                         previsao_entrega=date(2026, 9, 21))
+        manual = Order(codigo_interno="P2", codigo_interno_normalizado="P2",
+                       previsao_entrega=date(2026, 9, 22))
+        session.add_all([imported, manual])
+        session.flush()
+        session.add_all([
+            Audit(entity="pedidos", entity_id=str(imported.id), field="previsao_entrega",
+                  old_value=None, new_value="2026-09-21", source="PLANILHA_SERVICOS",
+                  action="UPDATE"),
+            Audit(entity="pedidos", entity_id=str(manual.id), field="previsao_entrega",
+                  old_value=None, new_value="2026-09-22", source="PLANILHA_SERVICOS",
+                  action="UPDATE"),
+            Audit(entity="pedidos", entity_id=str(manual.id), field="previsao_entrega",
+                  old_value="2026-09-22", new_value="2026-09-22", source="ROTA",
+                  action="DELIVERY_DATE_SET"),
+        ])
+
+    with Session(engine) as session, session.begin():
+        assert clear_spreadsheet_delivery_dates(session, None, "ADMIN") == 1
+
+    with Session(engine) as session:
+        imported = session.scalar(select(Order).where(Order.codigo_interno_normalizado == "P1"))
+        manual = session.scalar(select(Order).where(Order.codigo_interno_normalizado == "P2"))
+        assert imported.previsao_entrega is None
+        assert manual.previsao_entrega == date(2026, 9, 22)

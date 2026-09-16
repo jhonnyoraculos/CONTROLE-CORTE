@@ -17,7 +17,7 @@ from importers.excel_servicos import parse_excel
 from importers.normalizers import normalize_identifier
 from importers.pdf_carrinho import parse_pdf
 from services.importacao_service import ImportService, SERVICE_FIELDS
-from services.pedido_service import set_delivery_date
+from services.pedido_service import clear_spreadsheet_delivery_dates, set_delivery_date
 from services.route_service import check_delivery_route
 from ui.styles import chips, metric_cards, page_header
 from utils.formatters import date_br, datetime_br
@@ -56,6 +56,56 @@ def _parse_excel_cached(data: bytes):
 @st.cache_data(show_spinner=False, max_entries=64)
 def _parse_pdf_cached(data: bytes):
     return parse_pdf(data)
+
+
+def _excel_sample_rows() -> list[dict]:
+    return [
+        {
+            "Linha": 2,
+            "Pedido": "173368",
+            "Servico": "20533164",
+            "Cliente": "Cliente exemplo",
+            "Chapas": "11",
+            "Cortes": "282",
+            "Previsao da planilha": "Somente referencia",
+        },
+        {
+            "Linha": 3,
+            "Pedido": "175771",
+            "Servico": "23041038",
+            "Cliente": "Cliente exemplo",
+            "Chapas": "2",
+            "Cortes": "7",
+            "Previsao da planilha": "Nao define entrega",
+        },
+    ]
+
+
+def _excel_preview_rows(parsed, limit: int = 30) -> list[dict]:
+    return [
+        {
+            "Linha": row.row_number,
+            "Pedido": row.order_code,
+            "Servico": row.service_code,
+            "Cliente": row.fields.get("cliente_origem"),
+            "Chapas": row.fields.get("chapas"),
+            "Cortes": row.fields.get("cortes"),
+            "Previsao da planilha": date_br(row.fields.get("previsao_entrega")),
+        }
+        for row in parsed.rows[:limit]
+    ]
+
+
+def _pdf_sample_rows() -> list[dict]:
+    return [
+        {
+            "Arquivo": "carrinho.pdf",
+            "Pedido": "173368",
+            "Carrinho": "109633",
+            "Itens": 9,
+            "Status": "Exemplo",
+        }
+    ]
 
 
 def _excel_preview(factory, parsed):
@@ -131,6 +181,9 @@ def _excel_tab(factory, user, show_header: bool = True) -> None:
             ("2", "Revise", "Confira pedidos, servicos e avisos", "neutral"),
             ("3", "Confirme", "Grave apenas quando estiver pronto", "neutral"),
         ])
+        st.markdown("#### Exemplo dos dados esperados")
+        st.caption("A data da coluna Previsao Entrega e apenas referencia da planilha; a entrega oficial e manual.")
+        st.dataframe(_excel_sample_rows(), hide_index=True, use_container_width=True)
         return
 
     data = uploaded.getvalue()
@@ -158,22 +211,15 @@ def _excel_tab(factory, user, show_header: bool = True) -> None:
         if previous and previous.get("key") == file_key:
             _show_excel_result(previous["result"])
 
+        preview_rows = _excel_preview_rows(parsed)
+        st.markdown("#### Amostra da planilha")
+        st.caption("Confira algumas linhas antes de confirmar. A Previsao da planilha nao define entrega do pedido.")
+        st.dataframe(preview_rows, hide_index=True, use_container_width=True)
+
         with st.expander("Ver detalhes da planilha", expanded=False):
             if changed_services:
                 st.markdown("##### Alteracoes detectadas")
                 st.dataframe(changed_services[:50], hide_index=True, use_container_width=True)
-            preview_rows = [
-                {
-                    "Linha": row.row_number,
-                    "Pedido": row.order_code,
-                    "Servico": row.service_code,
-                    "Cliente": row.fields.get("cliente_origem"),
-                    "Chapas": row.fields.get("chapas"),
-                    "Cortes": row.fields.get("cortes"),
-                }
-                for row in parsed.rows[:30]
-            ]
-            st.dataframe(preview_rows, hide_index=True, use_container_width=True)
             for warning in parsed.warnings[:12]:
                 st.warning(warning)
             if parsed.errors:
@@ -289,6 +335,8 @@ def _pdf_tab(factory, user, show_header: bool = True) -> None:
             ("2", "Confira", "Veja se estao vinculaveis", "neutral"),
             ("3", "Importe", "Grave todos em lote", "neutral"),
         ])
+        st.markdown("#### Exemplo dos carrinhos")
+        st.dataframe(_pdf_sample_rows(), hide_index=True, use_container_width=True)
         return
 
     payloads = [(file.name, file.getvalue()) for file in files]
@@ -316,6 +364,7 @@ def _pdf_tab(factory, user, show_header: bool = True) -> None:
             }
             for item in previews
         ]
+        st.markdown("#### Amostra dos carrinhos")
         st.dataframe(rows, hide_index=True, use_container_width=True)
 
         all_warnings = [
@@ -453,6 +502,21 @@ def _delivery_panel(factory, user) -> None:
         ("Ja definidos", len(upcoming), "Entregas recentes e futuras", "neutral"),
         ("Regra", "Rota", "Cidade precisa bater com a semana", "good"),
     ])
+    cleanup_count = st.session_state.pop("spreadsheet_delivery_cleanup_count", None)
+    if cleanup_count is not None:
+        st.success(f"{cleanup_count} data(s) vindas da planilha foram limpas. Agora devem ser definidas manualmente.")
+    cleanup_cols = st.columns([1, 3])
+    with cleanup_cols[0]:
+        if st.button(
+            "Limpar datas da planilha",
+            help="Remove apenas entregas preenchidas por importacoes antigas da planilha de servicos.",
+            disabled=user.role == "CONSULTA",
+            use_container_width=True,
+        ):
+            with factory.begin() as tx:
+                cleaned = clear_spreadsheet_delivery_dates(tx, user.id, user.role)
+            st.session_state["spreadsheet_delivery_cleanup_count"] = cleaned
+            st.rerun()
     if not pending:
         st.info("Nao ha pedidos com carrinho e cidade aguardando data de entrega.")
     else:
