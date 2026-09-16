@@ -7,6 +7,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import date, timedelta
+from html import escape
 
 import streamlit as st
 from sqlalchemy import select
@@ -149,13 +150,33 @@ def _excel_preview(factory, parsed):
 
 def _show_excel_result(result) -> None:
     tone = "good" if result.status in {"IMPORTADO", "IMPORTADO_COM_ERROS"} else "warn"
+    status_text = "Importacao concluida" if tone == "good" else "Importacao com aviso"
+    st.markdown(
+        f"""
+        <div class="jr-import-done">
+          <div class="jr-import-check">&#10003;</div>
+          <div>
+            <div class="jr-import-title">{escape(status_text)}</div>
+            <div class="jr-import-subtitle">
+              {escape(result.file)} foi processado. A entrega do pedido continua manual pela rota.
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     metric_cards([
-        ("Status", result.status, result.file, tone),
         ("Pedidos novos", result.orders_created, "Criados no banco", "good"),
-        ("Servicos criados", result.created, "Linhas novas", "good"),
+        ("Servicos criados", result.created, "Linhas gravadas", "good"),
         ("Atualizados", result.updated, "Servicos alterados", "neutral"),
-        ("Ignorados", result.ignored, "Sem mudanca ou revisao", "warn"),
+        ("Sem mudanca", result.ignored, "Ja existiam ou aguardam revisao", "warn" if result.ignored else "neutral"),
     ])
+    st.dataframe([
+        {"Etapa": "Pedido", "Resultado": "Criado no banco", "Quantidade": result.orders_created},
+        {"Etapa": "Servico", "Resultado": "Criado", "Quantidade": result.created},
+        {"Etapa": "Servico", "Resultado": "Atualizado", "Quantidade": result.updated},
+        {"Etapa": "Linha", "Resultado": "Sem mudanca ou revisao", "Quantidade": result.ignored},
+    ], hide_index=True, use_container_width=True)
     if result.warnings:
         with st.expander("Avisos da importacao", expanded=False):
             for warning in result.warnings[:25]:
@@ -174,16 +195,28 @@ def _excel_tab(factory, user, show_header: bool = True) -> None:
             "Excel",
             "X",
         )
-    uploaded = st.file_uploader("Planilha geral de servicos", type="xlsx", key="excel")
+    previous = st.session_state.get("last_excel_import")
+    if previous:
+        _show_excel_result(previous["result"])
+        upload_container = st.expander("Importar outra planilha", expanded=False)
+    else:
+        upload_container = st.container()
+    with upload_container:
+        uploaded = st.file_uploader(
+            "Planilha geral de servicos",
+            type="xlsx",
+            key=f"excel_{st.session_state.get('excel_uploader_version', 0)}",
+        )
     if not uploaded:
-        metric_cards([
-            ("1", "Envie", "Selecione a planilha geral", "neutral"),
-            ("2", "Revise", "Confira pedidos, servicos e avisos", "neutral"),
-            ("3", "Confirme", "Grave apenas quando estiver pronto", "neutral"),
-        ])
-        st.markdown("#### Exemplo dos dados esperados")
-        st.caption("A data da coluna Previsao Entrega e apenas referencia da planilha; a entrega oficial e manual.")
-        st.dataframe(_excel_sample_rows(), hide_index=True, use_container_width=True)
+        if not previous:
+            metric_cards([
+                ("1", "Envie", "Selecione a planilha geral", "neutral"),
+                ("2", "Revise", "Confira pedidos, servicos e avisos", "neutral"),
+                ("3", "Confirme", "Grave apenas quando estiver pronto", "neutral"),
+            ])
+            st.markdown("#### Exemplo dos dados esperados")
+            st.caption("A data da coluna Previsao Entrega e apenas referencia da planilha; a entrega oficial e manual.")
+            st.dataframe(_excel_sample_rows(), hide_index=True, use_container_width=True)
         return
 
     data = uploaded.getvalue()
@@ -207,10 +240,6 @@ def _excel_tab(factory, user, show_header: bool = True) -> None:
             (f"{len(parsed.errors)} erros", "bad" if parsed.errors else "good"),
             (f"{len(clean_rows)} linhas prontas", "good"),
         ])
-        previous = st.session_state.get("last_excel_import")
-        if previous and previous.get("key") == file_key:
-            _show_excel_result(previous["result"])
-
         preview_rows = _excel_preview_rows(parsed)
         st.markdown("#### Amostra da planilha")
         st.caption("Confira algumas linhas antes de confirmar. A Previsao da planilha nao define entrega do pedido.")
@@ -240,6 +269,7 @@ def _excel_tab(factory, user, show_header: bool = True) -> None:
                         uploaded.name, data, force=force_excel
                     )
             st.session_state["last_excel_import"] = {"key": file_key, "result": result}
+            st.session_state["excel_uploader_version"] = st.session_state.get("excel_uploader_version", 0) + 1
             st.rerun()
     except Exception as exc:
         _error(exc)
@@ -304,6 +334,21 @@ def _show_pdf_outcomes(outcomes: list[dict]) -> None:
     pending = sum(1 for item in outcomes if item.get("Resultado") == "PENDENTE")
     duplicate = sum(1 for item in outcomes if item.get("Resultado") == "DUPLICADO")
     errors = sum(1 for item in outcomes if item.get("Resultado") == "ERRO")
+    title = "Carrinhos importados" if not errors else "Carrinhos importados com aviso"
+    st.markdown(
+        f"""
+        <div class="jr-import-done">
+          <div class="jr-import-check">&#10003;</div>
+          <div>
+            <div class="jr-import-title">{escape(title)}</div>
+            <div class="jr-import-subtitle">
+              O resultado abaixo mostra quais PDFs foram vinculados ao pedido e quais precisam de revisao.
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     metric_cards([
         ("Vinculados", linked, "Pedidos encontrados", "good"),
         ("Pendentes", pending, "Aguardam vinculo", "warn" if pending else "neutral"),
@@ -323,20 +368,28 @@ def _pdf_tab(factory, user, show_header: bool = True) -> None:
             "PDF",
             "P",
         )
-    files = st.file_uploader(
-        "Carrinhos em PDF",
-        type="pdf",
-        accept_multiple_files=True,
-        key="pdfs",
-    )
+    previous = st.session_state.get("last_pdf_import")
+    if previous:
+        _show_pdf_outcomes(previous["outcomes"])
+        upload_container = st.expander("Importar outros carrinhos", expanded=False)
+    else:
+        upload_container = st.container()
+    with upload_container:
+        files = st.file_uploader(
+            "Carrinhos em PDF",
+            type="pdf",
+            accept_multiple_files=True,
+            key=f"pdfs_{st.session_state.get('pdf_uploader_version', 0)}",
+        )
     if not files:
-        metric_cards([
-            ("1", "Envie", "Selecione um ou mais PDFs", "neutral"),
-            ("2", "Confira", "Veja se estao vinculaveis", "neutral"),
-            ("3", "Importe", "Grave todos em lote", "neutral"),
-        ])
-        st.markdown("#### Exemplo dos carrinhos")
-        st.dataframe(_pdf_sample_rows(), hide_index=True, use_container_width=True)
+        if not previous:
+            metric_cards([
+                ("1", "Envie", "Selecione um ou mais PDFs", "neutral"),
+                ("2", "Confira", "Veja se estao vinculaveis", "neutral"),
+                ("3", "Importe", "Grave todos em lote", "neutral"),
+            ])
+            st.markdown("#### Exemplo dos carrinhos")
+            st.dataframe(_pdf_sample_rows(), hide_index=True, use_container_width=True)
         return
 
     payloads = [(file.name, file.getvalue()) for file in files]
@@ -376,10 +429,6 @@ def _pdf_tab(factory, user, show_header: bool = True) -> None:
             with st.expander("Avisos dos PDFs", expanded=False):
                 st.dataframe(all_warnings, hide_index=True, use_container_width=True)
 
-        previous = st.session_state.get("last_pdf_import")
-        if previous and previous.get("key") == batch_key:
-            _show_pdf_outcomes(previous["outcomes"])
-
         with st.form("confirm_pdf_import"):
             force_pdf = st.checkbox(
                 "Reprocessar PDFs identicos",
@@ -408,6 +457,7 @@ def _pdf_tab(factory, user, show_header: bool = True) -> None:
                         _error(exc)
                         outcomes.append({"Arquivo": name, "Resultado": "ERRO"})
             st.session_state["last_pdf_import"] = {"key": batch_key, "outcomes": outcomes}
+            st.session_state["pdf_uploader_version"] = st.session_state.get("pdf_uploader_version", 0) + 1
             st.rerun()
     except Exception as exc:
         _error(exc)

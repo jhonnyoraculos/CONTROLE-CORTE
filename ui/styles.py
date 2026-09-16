@@ -285,6 +285,46 @@ def inject_styles():
     .jr-chip.warn { color: #8c5b0d; background: rgba(229, 159, 55, .15); }
     .jr-chip.bad { color: #99404a; background: rgba(223, 91, 102, .14); }
 
+    .jr-import-done {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 1rem;
+      align-items: center;
+      border: 1px solid rgba(69, 201, 154, .26);
+      border-radius: 18px;
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, .84), rgba(239, 255, 250, .72)),
+        radial-gradient(circle at 94% 28%, rgba(69, 201, 154, .18), transparent 14rem);
+      box-shadow: 0 18px 46px rgba(32, 118, 99, .10);
+      padding: 1rem 1.1rem;
+      margin: .9rem 0 1rem;
+    }
+
+    .jr-import-check {
+      width: 3.2rem;
+      height: 3.2rem;
+      border-radius: 16px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-size: 1.65rem;
+      font-weight: 900;
+      background: linear-gradient(135deg, var(--jr-green), var(--jr-cyan));
+      box-shadow: 0 16px 30px rgba(69, 201, 154, .28);
+    }
+
+    .jr-import-title {
+      color: var(--jr-ink);
+      font-size: 1.15rem;
+      font-weight: 850;
+      margin-bottom: .25rem;
+    }
+
+    .jr-import-subtitle {
+      color: var(--jr-muted);
+      font-size: .92rem;
+    }
+
     .stTabs [data-baseweb="tab-list"] {
       gap: .45rem;
       border-bottom: 0;
