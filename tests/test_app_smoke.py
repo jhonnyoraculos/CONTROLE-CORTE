@@ -35,8 +35,9 @@ def test_app_starts_without_login_by_default(tmp_path: Path, monkeypatch) -> Non
                                 message="PDF de teste"))
     app = AppTest.from_file(Path(__file__).resolve().parents[1] / "app.py").run(timeout=30)
     assert not app.exception
-    assert len(app.file_uploader) >= 2
-    for module in ("orders", "production", "planning", "pending", "reports", "imports", "admin"):
+    assert any("Dashboard" in item.value for item in app.markdown)
+    for module in ("orders", "production", "planning", "pending", "reports",
+                   "imports", "admin", "overview", "production_workspace"):
         user = "SimpleNamespace(id=None, name='Operador', role='ADMIN')"
         page = AppTest.from_string(
             "from types import SimpleNamespace\n"
@@ -47,10 +48,12 @@ def test_app_starts_without_login_by_default(tmp_path: Path, monkeypatch) -> Non
         ).run(timeout=30)
         assert not page.exception, module
         if module == "imports":
+            assert len(page.file_uploader) >= 2
             prepare = next(button for button in page.button
                            if button.label == "Preparar arquivo de origem")
             prepare.click().run(timeout=30)
             assert not page.exception
+        if module == "production_workspace":
             start_mode = next(radio for radio in page.radio
                               if radio.label == "Início da produção")
             start_mode.set_value("Escolher data e hora").run(timeout=30)

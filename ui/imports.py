@@ -659,11 +659,9 @@ def _delivery_panel(factory, user) -> None:
 
 
 def render(factory, user):
-    from ui import operation_grid
-
     page_header(
         "Operacao do corte",
-        "Importe arquivos, acompanhe pedidos, registre a producao e defina entregas pela rota.",
+        "Importe arquivos, confira pedidos e defina entregas pela rota.",
         "Fluxo principal",
         "Sistema ativo",
         "O",
@@ -672,7 +670,6 @@ def render(factory, user):
         _excel_tab(factory, user, show_header=False)
     with st.expander("Importar carrinhos PDF", expanded=True):
         _pdf_tab(factory, user, show_header=False)
-    operation_grid.render(factory, user)
     with st.expander("Entrega por rota", expanded=True):
         _delivery_panel(factory, user)
     with st.expander("Historico de importacao", expanded=False):

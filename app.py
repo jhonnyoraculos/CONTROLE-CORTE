@@ -138,7 +138,7 @@ def main():
     if not user:
         return
 
-    from ui import admin, imports, orders
+    from ui import admin, imports, orders, overview, production_workspace
 
     orders_page = st.Page(
         lambda: _render_page(orders.render, factory, user),
@@ -148,10 +148,20 @@ def main():
     st.session_state["orders_page"] = orders_page
     pages = [
         st.Page(
-            lambda: _render_page(imports.render, factory, user),
-            title="Operacao",
-            url_path="operacao",
+            lambda: _render_page(overview.render, factory, user),
+            title="Dashboard",
+            url_path="dashboard",
             default=True,
+        ),
+        st.Page(
+            lambda: _render_page(imports.render, factory, user),
+            title="Operação",
+            url_path="operacao",
+        ),
+        st.Page(
+            lambda: _render_page(production_workspace.render, factory, user),
+            title="Produção",
+            url_path="producao",
         ),
         orders_page,
     ]
