@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from html import escape
 
+import pandas as pd
 import streamlit as st
 from sqlalchemy import select
 from sqlalchemy.orm import defer
@@ -59,26 +60,24 @@ def _parse_pdf_cached(data: bytes):
     return parse_pdf(data)
 
 
-def _excel_sample_rows() -> list[dict]:
+EXCEL_SAVED_COLUMNS = ["Pedido", "Servico", "Cliente", "Carrinho", "Chapas", "Cortes", "Status"]
+PDF_SAVED_COLUMNS = ["Arquivo", "Pedido", "Carrinho", "Itens", "Status"]
+
+
+def _saved_excel_rows(factory) -> list[dict]:
+    with factory() as session:
+        rows = session.execute(select(
+            Order.codigo_interno, Service.codigo_servico, Order.cliente_pdf,
+            Service.cliente_origem, Order.carrinho, Service.chapas,
+            Service.cortes, Order.status_producao,
+        ).join(Order, Order.id == Service.pedido_id).order_by(
+            Service.updated_at.desc(), Service.codigo_servico,
+        ).limit(30)).all()
     return [
-        {
-            "Linha": 2,
-            "Pedido": "173368",
-            "Servico": "20533164",
-            "Cliente": "Cliente exemplo",
-            "Chapas": "11",
-            "Cortes": "282",
-            "Previsao da planilha": "Somente referencia",
-        },
-        {
-            "Linha": 3,
-            "Pedido": "175771",
-            "Servico": "23041038",
-            "Cliente": "Cliente exemplo",
-            "Chapas": "2",
-            "Cortes": "7",
-            "Previsao da planilha": "Nao define entrega",
-        },
+        {"Pedido": code, "Servico": service, "Cliente": pdf_client or excel_client,
+         "Carrinho": cart, "Chapas": sheets, "Cortes": cuts,
+         "Status": status.replace("_", " ")}
+        for code, service, pdf_client, excel_client, cart, sheets, cuts, status in rows
     ]
 
 
@@ -97,15 +96,18 @@ def _excel_preview_rows(parsed, limit: int = 30) -> list[dict]:
     ]
 
 
-def _pdf_sample_rows() -> list[dict]:
+def _saved_pdf_rows(factory) -> list[dict]:
+    with factory() as session:
+        rows = session.execute(select(
+            Document.nome_arquivo, Order.codigo_interno, Order.carrinho,
+            Document.quantidade_registros, Document.status,
+        ).outerjoin(Order, Order.id == Document.pedido_id).where(
+            Document.tipo_documento == "CARRINHO_PDF",
+        ).order_by(Document.data_importacao.desc()).limit(30)).all()
     return [
-        {
-            "Arquivo": "carrinho.pdf",
-            "Pedido": "173368",
-            "Carrinho": "109633",
-            "Itens": 9,
-            "Status": "Exemplo",
-        }
+        {"Arquivo": name, "Pedido": code, "Carrinho": cart,
+         "Itens": items, "Status": status}
+        for name, code, cart, items, status in rows
     ]
 
 
@@ -214,9 +216,13 @@ def _excel_tab(factory, user, show_header: bool = True) -> None:
                 ("2", "Revise", "Confira pedidos, servicos e avisos", "neutral"),
                 ("3", "Confirme", "Grave apenas quando estiver pronto", "neutral"),
             ])
-            st.markdown("#### Exemplo dos dados esperados")
-            st.caption("A data da coluna Previsao Entrega e apenas referencia da planilha; a entrega oficial e manual.")
-            st.dataframe(_excel_sample_rows(), hide_index=True, use_container_width=True)
+        saved_rows = _saved_excel_rows(factory)
+        st.markdown("#### Serviços já importados")
+        st.caption("Registros reais gravados no banco. A prévia do arquivo aparecerá após o upload.")
+        st.dataframe(pd.DataFrame(saved_rows, columns=EXCEL_SAVED_COLUMNS),
+                     hide_index=True, use_container_width=True)
+        if not saved_rows:
+            st.info("Nenhum serviço importado ainda.")
         return
 
     data = uploaded.getvalue()
@@ -241,7 +247,7 @@ def _excel_tab(factory, user, show_header: bool = True) -> None:
             (f"{len(clean_rows)} linhas prontas", "good"),
         ])
         preview_rows = _excel_preview_rows(parsed)
-        st.markdown("#### Amostra da planilha")
+        st.markdown("#### Prévia do arquivo selecionado")
         st.caption("Confira algumas linhas antes de confirmar. A Previsao da planilha nao define entrega do pedido.")
         st.dataframe(preview_rows, hide_index=True, use_container_width=True)
 
@@ -388,8 +394,13 @@ def _pdf_tab(factory, user, show_header: bool = True) -> None:
                 ("2", "Confira", "Veja se estao vinculaveis", "neutral"),
                 ("3", "Importe", "Grave todos em lote", "neutral"),
             ])
-            st.markdown("#### Exemplo dos carrinhos")
-            st.dataframe(_pdf_sample_rows(), hide_index=True, use_container_width=True)
+        saved_rows = _saved_pdf_rows(factory)
+        st.markdown("#### Carrinhos já importados")
+        st.caption("Arquivos reais gravados no banco. A prévia dos PDFs aparecerá após o upload.")
+        st.dataframe(pd.DataFrame(saved_rows, columns=PDF_SAVED_COLUMNS),
+                     hide_index=True, use_container_width=True)
+        if not saved_rows:
+            st.info("Nenhum carrinho importado ainda.")
         return
 
     payloads = [(file.name, file.getvalue()) for file in files]
@@ -417,7 +428,7 @@ def _pdf_tab(factory, user, show_header: bool = True) -> None:
             }
             for item in previews
         ]
-        st.markdown("#### Amostra dos carrinhos")
+        st.markdown("#### Prévia dos PDFs selecionados")
         st.dataframe(rows, hide_index=True, use_container_width=True)
 
         all_warnings = [
