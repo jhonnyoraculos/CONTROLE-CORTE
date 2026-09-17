@@ -110,6 +110,65 @@ def record_event(session: Session, order: Order, event_type: str, user_id,
     return event
 
 
+ACTIVE_PRODUCTION_STATUSES = {"EM_CORTE", "AGUARDANDO_FITAGEM", "EM_FITAGEM",
+                              "AGUARDANDO_USINAGEM", "EM_USINAGEM"}
+CLOSED_PRODUCTION_STATUSES = {"PRODUCAO_FINALIZADA", "AGUARDANDO_CARREGAMENTO",
+                              "LIBERADO_CARREGAMENTO", "ENTREGUE", "RETIRADO", "CANCELADO"}
+
+
+def start_production(session: Session, order: Order, user_id, role: str,
+                     started_at: datetime | None = None,
+                     responsible: str = "") -> ProductionEvent:
+    """Record the operator's actual start time and move the order into production."""
+    require_role(role, "produce")
+    if not responsible.strip():
+        raise ValueError("Informe quem esta registrando o inicio da producao.")
+    if order.status_producao in ACTIVE_PRODUCTION_STATUSES | CLOSED_PRODUCTION_STATUSES:
+        raise ValueError("Este pedido ja esta em producao ou foi encerrado.")
+    if order.falta_material:
+        raise ValueError("Resolva a falta de material antes de iniciar a producao.")
+    start = started_at or now()
+    if start.tzinfo is None or start.utcoffset() is None:
+        raise ValueError("Informe data e hora com fuso horario.")
+    start = start.astimezone(timezone.utc)
+    if start > now():
+        raise ValueError("O inicio da producao nao pode estar no futuro.")
+    event = ProductionEvent(pedido_id=order.id, type="INICIAR_CORTE", at=start,
+                            user_id=user_id, machine_id=order.maquina_id,
+                            observation=f"Responsavel: {responsible.strip()}" if responsible.strip() else None)
+    session.add(event)
+    _status(session, order, "EM_CORTE", user_id, "PRODUCAO")
+    log_event("PRODUCTION_STARTED", user_id=user_id, order_id=order.id)
+    return event
+
+
+def finish_production(session: Session, order: Order, user_id, role: str,
+                      responsible: str = "") -> ProductionEvent:
+    """Close an active production order at the current time."""
+    require_role(role, "produce")
+    if not responsible.strip():
+        raise ValueError("Informe quem esta encerrando a producao.")
+    if order.status_producao not in ACTIVE_PRODUCTION_STATUSES:
+        raise ValueError("Este pedido nao esta em producao.")
+    start = session.scalar(select(ProductionEvent).where(
+        ProductionEvent.pedido_id == order.id,
+        ProductionEvent.type == "INICIAR_CORTE",
+    ).order_by(ProductionEvent.at.desc()).limit(1))
+    if start is None:
+        raise ValueError("Registre o inicio da producao antes de encerrar.")
+    finished_at = now()
+    started_at = start.at if start.at.tzinfo else start.at.replace(tzinfo=timezone.utc)
+    if finished_at < started_at:
+        raise ValueError("O fim da producao nao pode ser anterior ao inicio.")
+    event = ProductionEvent(pedido_id=order.id, type="FINALIZAR_PRODUCAO", at=finished_at,
+                            user_id=user_id, machine_id=order.maquina_id,
+                            observation=f"Responsavel: {responsible.strip()}" if responsible.strip() else None)
+    session.add(event)
+    _status(session, order, "PRODUCAO_FINALIZADA", user_id, "PRODUCAO")
+    log_event("PRODUCTION_FINISHED", user_id=user_id, order_id=order.id)
+    return event
+
+
 def set_status(session: Session, order: Order, new_status: str, user_id,
                role: str, reason: str = "") -> None:
     """Manager adjustment for logistics, cancellation, or exceptional states."""

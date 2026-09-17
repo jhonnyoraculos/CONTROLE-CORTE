@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from streamlit.testing.v1 import AppTest
 
 from db.engine import make_engine
@@ -51,6 +51,28 @@ def test_app_starts_without_login_by_default(tmp_path: Path, monkeypatch) -> Non
                            if button.label == "Preparar arquivo de origem")
             prepare.click().run(timeout=30)
             assert not page.exception
+            start_mode = next(radio for radio in page.radio
+                              if radio.label == "Início da produção")
+            start_mode.set_value("Escolher data e hora").run(timeout=30)
+            assert not page.exception
+            operator = next(item for item in page.text_input
+                            if item.label == "Quem está registrando?")
+            operator.set_value("Ana").run(timeout=30)
+            start_button = next(button for button in page.button
+                                if button.label == "Registrar início da produção")
+            start_button.click().run(timeout=30)
+            assert not page.exception
+            with Session(engine) as session:
+                assert session.scalar(select(Order.status_producao)) == "EM_CORTE"
+            confirmed = next(item for item in page.checkbox
+                             if item.label == "Confirmo que a produção deste pedido terminou")
+            confirmed.set_value(True).run(timeout=30)
+            finish_button = next(button for button in page.button
+                                 if button.label == "Encerrar produção agora")
+            finish_button.click().run(timeout=30)
+            assert not page.exception
+            with Session(engine) as session:
+                assert session.scalar(select(Order.status_producao)) == "PRODUCAO_FINALIZADA"
     detail = AppTest.from_string(
         "from ui import orders\n"
         "from types import SimpleNamespace\n"

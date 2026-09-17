@@ -9,7 +9,11 @@ from sqlalchemy.orm import Session
 
 from db.models import Audit, Base, Capacity, Order, ProductionEvent, Service
 from db.repositories.orders import search_orders
-from services.producao_service import durations, plan_order, preview_plan, record_event, set_status
+from services.producao_service import (
+    durations, finish_production, plan_order, preview_plan, record_event,
+    set_status, start_production,
+)
+from ui.operation_grid import _rows
 
 
 def test_capacity_and_production_history(tmp_path):
@@ -77,3 +81,41 @@ def test_queue_priority_sort_and_pagination(tmp_path):
         assert total == 4
         assert [order.codigo_interno for order in first] == ["U2", "U1"]
         assert [order.codigo_interno for order in second] == ["A1", "N1"]
+
+
+def test_manual_production_start_and_finish(tmp_path):
+    engine = create_engine(f"sqlite:///{(tmp_path / 'manual_production.sqlite').as_posix()}")
+    Base.metadata.create_all(engine)
+    chosen = datetime(2026, 9, 16, 14, 30, tzinfo=timezone(timedelta(hours=-3)))
+    with Session(engine) as session, session.begin():
+        order = Order(codigo_interno="P100", codigo_interno_normalizado="P100",
+                      status_producao="AGUARDANDO_PROGRAMACAO")
+        session.add(order)
+        session.flush()
+        with pytest.raises(PermissionError):
+            start_production(session, order, None, "CONSULTA", chosen, "Ana")
+        with pytest.raises(ValueError, match="futuro"):
+            start_production(session, order, None, "OPERADOR",
+                             datetime.now(timezone.utc) + timedelta(days=1), "Ana")
+        started = start_production(session, order, None, "OPERADOR", chosen, "Ana")
+        assert started.at == chosen.astimezone(timezone.utc)
+        assert started.observation == "Responsavel: Ana"
+        assert order.status_producao == "EM_CORTE"
+        with pytest.raises(ValueError, match="ja esta em producao"):
+            start_production(session, order, None, "OPERADOR", chosen, "Ana")
+    with Session(engine) as session, session.begin():
+        order = session.scalar(select(Order).where(Order.codigo_interno == "P100"))
+        finished = finish_production(session, order, None, "OPERADOR", "Bruno")
+        assert finished.observation == "Responsavel: Bruno"
+        assert order.status_producao == "PRODUCAO_FINALIZADA"
+        with pytest.raises(ValueError, match="nao esta em producao"):
+            finish_production(session, order, None, "OPERADOR", "Bruno")
+    with Session(engine) as session:
+        events = session.scalars(select(ProductionEvent).order_by(ProductionEvent.at)).all()
+        assert [event.type for event in events] == ["INICIAR_CORTE", "FINALIZAR_PRODUCAO"]
+        assert durations(events)["producao"]
+        row = _rows(session, [session.scalar(select(Order))])[0]
+        assert row["Inicio producao"] == "16/09/2026 14:30"
+        assert row["Iniciado por"] == "Ana"
+        assert row["Encerrado por"] == "Bruno"
+        assert row["Status"] == "PRODUCAO FINALIZADA"
