@@ -14,6 +14,11 @@ from openpyxl import load_workbook
 
 ROUTE_FILE = Path(__file__).resolve().parents[1] / "ROTAS_2026.xlsx"
 WEEKDAYS = ("SEGUNDA", "TERCA", "QUARTA", "QUINTA", "SEXTA")
+STATE_UFS = {
+    "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT",
+    "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP",
+    "TO",
+}
 
 
 @dataclass(frozen=True)
@@ -44,7 +49,11 @@ def normalize_city(value: object) -> str:
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     text = re.sub(r"[^A-Za-z0-9]+", " ", text).strip().upper()
     text = re.sub(r"\bCONDICAO\b", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
+    parts = text.split()
+    if len(parts) > 1 and parts[-1] in STATE_UFS:
+        text = " ".join(parts[:-1])
+    return text
 
 
 def _city_keys(value: object) -> set[str]:

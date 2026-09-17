@@ -45,7 +45,7 @@ from services.importacao_service import ImportService
 from services.note_service import add_note
 from services.pedido_service import clear_spreadsheet_delivery_dates, set_delivery_date
 from services.producao_service import record_event
-from services.route_service import check_delivery_route, normalize_city
+from services.route_service import allowed_weekdays_for, check_delivery_route, normalize_city
 from services.status_flow import get_flow, get_shifts, save_flow, save_shifts, save_statuses
 
 
@@ -63,7 +63,10 @@ def test_neon_database_url_is_accepted_as_copied() -> None:
 def test_route_spreadsheet_validates_city_by_weekday() -> None:
     assert normalize_city("Divinópolis (R.10)") == "DIVINOPOLIS"
     assert check_delivery_route("Divinópolis", date(2026, 8, 17)).ok
+    assert normalize_city("Itabira - MG") == "ITABIRA"
+    assert check_delivery_route("Itabira - MG", date(2026, 9, 23)).ok
     assert check_delivery_route("Ponte Nova", date(2026, 8, 18)).ok
+    assert allowed_weekdays_for("Itabira - MG") == allowed_weekdays_for("Itabira")
     assert not check_delivery_route("Ponte Nova", date(2026, 8, 17)).ok
 
 
