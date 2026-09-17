@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 from db.models import Audit, Base, Capacity, Order, ProductionEvent, Service
 from db.repositories.orders import search_orders
 from services.producao_service import (
-    durations, finish_production, plan_order, preview_plan, record_event, saved_estimate,
+    durations, finish_production, plan_order, preview_plan, production_clock,
+    record_event, saved_estimate,
     set_status, start_production,
 )
 from ui.operation_grid import _rows
@@ -106,6 +107,8 @@ def test_manual_production_start_and_finish(tmp_path):
         assert started.observation == "Responsavel: Ana"
         assert order.status_producao == "EM_CORTE"
         assert saved_estimate(session, order.id).total_seconds == 18720
+        assert not production_clock(session, order, chosen + timedelta(seconds=18719)).is_due
+        assert production_clock(session, order, chosen + timedelta(seconds=18720)).is_due
         with pytest.raises(ValueError, match="ja esta em producao"):
             start_production(session, order, None, "OPERADOR", chosen, "Ana")
     with Session(engine) as session, session.begin():

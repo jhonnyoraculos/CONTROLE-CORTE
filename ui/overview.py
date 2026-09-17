@@ -12,9 +12,9 @@ from sqlalchemy import func, select
 
 from db.models import Audit, Order
 from services.producao_service import ACTIVE_PRODUCTION_STATUSES, CLOSED_PRODUCTION_STATUSES
-from ui.operation_grid import _rows, _status_label
-from ui.styles import metric_cards, page_header
-from utils.formatters import date_br
+from ui.operation_grid import _rows
+from ui.overview_visuals import render_visuals
+from ui.styles import page_header
 
 
 def _manual_delivery_ids(session) -> list[UUID]:
@@ -96,28 +96,6 @@ def _overview_data(session, today):
     }
 
 
-def _brief_rows(orders):
-    return [
-        {
-            "Pedido": order.codigo_interno,
-            "Cliente": order.cliente_pdf or "Aguardando carrinho",
-            "Cidade": order.cidade or "",
-            "Carrinho": order.carrinho or "",
-            "Status": _status_label(order.status_producao),
-        }
-        for order in orders
-    ]
-
-
-def _delivery_rows(orders):
-    return [
-        {"Pedido": order.codigo_interno, "Cliente": order.cliente_pdf or "",
-         "Cidade": order.cidade or "", "Entrega": date_br(order.previsao_entrega),
-         "Status": _status_label(order.status_producao)}
-        for order in orders
-    ]
-
-
 def render(factory, user):
     local_now = datetime.now(ZoneInfo(os.getenv("APP_TIMEZONE", "America/Sao_Paulo")))
     today = local_now.date()
@@ -132,59 +110,6 @@ def render(factory, user):
 
     with factory() as session:
         data = _overview_data(session, today)
-        production_rows = [{key: row[key] for key in (
-            "Pedido", "Cliente", "Cidade", "Inicio producao", "Tempo estimado",
-            "Iniciado por", "Status",
-        )} for row in _rows(session, data["production"])]
-        waiting_rows = _brief_rows(data["waiting"])
-        recent_rows = _brief_rows(data["recent"])
+        production_rows = _rows(session, data["production"], include_meta=True)
 
-    metric_cards([
-        ("Pedidos", data["total"], "Todos os pedidos importados", "neutral"),
-        ("Aguardando", data["awaiting"], "Ainda não iniciados", "warn"),
-        ("Em produção", data["active"], "Produção em andamento", "good"),
-        ("Concluídos", data["finished"], "Produção concluída", "good"),
-        ("Entregues", data["delivered"], "Pedidos entregues ou retirados", "good"),
-        ("Próximas entregas", data["due_soon"], "Entregas manuais nos próximos 7 dias", "neutral"),
-        ("Atrasados", data["overdue"], "Entregas manuais anteriores a hoje", "bad"),
-        ("Falta material", data["shortages"], "Pedidos abertos com falta de material", "warn"),
-    ])
-    if data["missing_cart"]:
-        st.info(f"{data['missing_cart']} pedido(s) ainda aguardam carrinho PDF.")
-
-    left, right = st.columns(2)
-    with left:
-        st.markdown("#### Em produção")
-        if production_rows:
-            st.dataframe(production_rows, hide_index=True, use_container_width=True, height=320)
-        else:
-            st.info("Nenhum pedido em produção agora.")
-    with right:
-        st.markdown("#### Próximas entregas")
-        if data["upcoming"]:
-            st.dataframe(_delivery_rows(data["upcoming"]), hide_index=True,
-                         use_container_width=True, height=320)
-        else:
-            st.info("Nenhuma entrega manual futura definida.")
-
-    left, right = st.columns(2)
-    with left:
-        st.markdown("#### Aguardando produção")
-        if waiting_rows:
-            st.dataframe(waiting_rows, hide_index=True, use_container_width=True, height=350)
-        else:
-            st.info("Nenhum pedido aguardando início.")
-    with right:
-        st.markdown("#### Pedidos recentes")
-        if recent_rows:
-            st.dataframe(recent_rows, hide_index=True, use_container_width=True, height=350)
-        else:
-            st.info("Nenhum pedido importado ainda. Comece pela aba Operação.")
-    if data["material"]:
-        with st.expander(f"Pedidos com falta de material ({data['shortages']})", expanded=False):
-            st.dataframe(_brief_rows(data["material"]), hide_index=True,
-                         use_container_width=True)
-    if data["late"]:
-        with st.expander(f"Entregas atrasadas ({data['overdue']})", expanded=False):
-            st.dataframe(_delivery_rows(data["late"]), hide_index=True,
-                         use_container_width=True)
+    render_visuals(data, production_rows, local_now)

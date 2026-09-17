@@ -2,6 +2,7 @@
 
 import uuid
 import json
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
@@ -143,6 +144,34 @@ ACTIVE_PRODUCTION_STATUSES = {"EM_CORTE", "AGUARDANDO_FITAGEM", "EM_FITAGEM",
                               "AGUARDANDO_USINAGEM", "EM_USINAGEM"}
 CLOSED_PRODUCTION_STATUSES = {"PRODUCAO_FINALIZADA", "AGUARDANDO_CARREGAMENTO",
                               "LIBERADO_CARREGAMENTO", "ENTREGUE", "RETIRADO", "CANCELADO"}
+
+
+@dataclass(frozen=True)
+class ProductionClock:
+    start_at: datetime
+    estimated_seconds: int
+    elapsed_seconds: int
+    is_due: bool
+
+
+def production_clock(session: Session, order: Order,
+                     current: datetime | None = None) -> ProductionClock | None:
+    if order.status_producao not in ACTIVE_PRODUCTION_STATUSES:
+        return None
+    start = session.scalar(select(ProductionEvent).where(
+        ProductionEvent.pedido_id == order.id,
+        ProductionEvent.type == "INICIAR_CORTE",
+    ).order_by(ProductionEvent.at.desc()).limit(1))
+    if start is None:
+        return None
+    start_at = start.at if start.at.tzinfo else start.at.replace(tzinfo=timezone.utc)
+    current_at = current or now()
+    if current_at.tzinfo is None:
+        current_at = current_at.replace(tzinfo=timezone.utc)
+    elapsed = max(0, int((current_at - start_at).total_seconds()))
+    estimate = saved_estimate(session, order.id) or estimate_production(order.services)
+    seconds = estimate.total_seconds
+    return ProductionClock(start_at, seconds, elapsed, bool(seconds and elapsed >= seconds))
 
 
 def start_production(session: Session, order: Order, user_id, role: str,

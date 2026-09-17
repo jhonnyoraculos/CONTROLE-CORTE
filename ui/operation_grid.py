@@ -18,8 +18,9 @@ from services.estimativa_service import (
 )
 from services.producao_service import (
     ACTIVE_PRODUCTION_STATUSES, CLOSED_PRODUCTION_STATUSES,
-    finish_production, saved_estimate, start_production,
+    finish_production, production_clock, saved_estimate, start_production,
 )
+from ui.live_timer import render_timer
 from utils.formatters import date_br, datetime_br, decimal_br, money_br
 
 
@@ -74,7 +75,7 @@ def _orders(session, term: str, group: str, page: int):
     return orders, total
 
 
-def _rows(session, orders):
+def _rows(session, orders, *, include_meta: bool = False):
     if not orders:
         return []
     ids = [order.id for order in orders]
@@ -116,7 +117,7 @@ def _rows(session, orders):
         if start and finish:
             minutes = max(0, int((finish.at - start.at).total_seconds() // 60))
             elapsed = f"{minutes // 60:02d}h {minutes % 60:02d}min"
-        result.append({
+        row = {
             "Pedido": order.codigo_interno,
             "Data pedido": date_br(order.data_pedido),
             "Cliente": order.cliente_pdf or (first.cliente_origem if first else None),
@@ -147,7 +148,11 @@ def _rows(session, orders):
             "Tempo estimado": duration_label(estimate.total_seconds) if estimate.total_seconds else "Sem medidas",
             "Status": _status_label(order.status_producao),
             "Observacoes": order.observacao_operacional,
-        })
+        }
+        if include_meta:
+            row["_start_at"] = start.at if start else None
+            row["_estimate_seconds"] = estimate.total_seconds
+        result.append(row)
     return result
 
 
@@ -182,9 +187,12 @@ def _render_content(factory, user):
     selected = by_id[selected_id]
     st.caption(f"Status atual: {_status_label(selected.status_producao)}")
     with factory() as session:
-        selected_services = session.scalars(select(Service).where(
-            Service.pedido_id == selected.id)).all()
+        current_order = session.get(Order, selected.id)
+        selected_services = session.scalars(select(Service).where(Service.pedido_id == selected.id)).all()
         estimate = saved_estimate(session, selected.id) or estimate_production(selected_services)
+        clock = production_clock(session, current_order) if current_order else None
+    if clock:
+        render_timer(clock, selected.codigo_interno)
     if estimate.total_seconds:
         st.markdown("#### Tempo estimado para este pedido")
         cut_col, drill_col, edge_col, total_col = st.columns(4)

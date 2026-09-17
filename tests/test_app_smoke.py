@@ -1,13 +1,16 @@
 """Run the Streamlit entry point with an isolated migrated-shaped database."""
 
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
 from streamlit.testing.v1 import AppTest
 
 from db.engine import make_engine
 from db.models import Base, Document, ImportError, Order, Service
 from services.auth_service import create_user
+from services.producao_service import start_production
 
 
 def test_app_starts_without_login_by_default(tmp_path: Path, monkeypatch) -> None:
@@ -16,8 +19,6 @@ def test_app_starts_without_login_by_default(tmp_path: Path, monkeypatch) -> Non
     make_engine.cache_clear()
     engine = create_engine(url)
     Base.metadata.create_all(engine)
-    from sqlalchemy.orm import Session
-
     with Session(engine) as session, session.begin():
         create_user(session, "Test Admin", "admin@example.com", "SecurePass123!", "ADMIN")
         order = Order(codigo_interno="T1", codigo_interno_normalizado="T1")
@@ -105,8 +106,6 @@ def test_first_admin_can_be_created_from_deployment_secrets(tmp_path: Path, monk
     Base.metadata.create_all(engine)
     app = AppTest.from_file(Path(__file__).resolve().parents[1] / "app.py").run(timeout=30)
     assert not app.exception
-    from sqlalchemy.orm import Session
-    from sqlalchemy import select
     from db.models import User
     from services.auth_service import passwords
 
@@ -116,4 +115,39 @@ def test_first_admin_can_be_created_from_deployment_secrets(tmp_path: Path, monk
         assert users[0].role == "ADMIN"
         assert users[0].email == "gestor@example.com"
         assert passwords.verify("SecureBootstrap123!", users[0].password_hash)
+    make_engine.cache_clear()
+
+
+def test_due_production_asks_before_finishing(tmp_path: Path, monkeypatch) -> None:
+    url = f"sqlite:///{(tmp_path / 'due.sqlite').as_posix()}"
+    monkeypatch.setenv("DATABASE_URL", url)
+    make_engine.cache_clear()
+    engine = create_engine(url)
+    Base.metadata.create_all(engine)
+    with Session(engine) as session, session.begin():
+        order = Order(codigo_interno="P1", codigo_interno_normalizado="P1",
+                      status_producao="AGUARDANDO_PROGRAMACAO")
+        session.add(order)
+        session.flush()
+        session.add(Service(pedido_id=order.id, codigo_servico="S1",
+                            codigo_servico_normalizado="S1", cortes=200))
+        session.flush()
+        start_production(session, order, None, "OPERADOR",
+                         datetime.now(timezone.utc) - timedelta(hours=2), "Ana")
+    page = AppTest.from_string(
+        "from types import SimpleNamespace\n"
+        "from ui import production_workspace\n"
+        "from db.engine import session_factory\n"
+        "production_workspace.render(session_factory(), "
+        "SimpleNamespace(id=None, role='ADMIN', name='Operador'))\n"
+    ).run(timeout=30)
+    assert not page.exception
+    assert any("tempo estimado" in item.value.lower() for item in page.warning)
+    name = next(item for item in page.text_input if item.label == "Quem confirma o término?")
+    name.set_value("Bruno").run(timeout=30)
+    button = next(item for item in page.button if item.label == "Sim, encerrar produção")
+    button.click().run(timeout=30)
+    assert not page.exception
+    with Session(engine) as session:
+        assert session.scalar(select(Order.status_producao)) == "PRODUCAO_FINALIZADA"
     make_engine.cache_clear()
