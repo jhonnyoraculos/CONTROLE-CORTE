@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -12,9 +13,12 @@ import streamlit as st
 from sqlalchemy import func, or_, select
 
 from db.models import Audit, Order, ProductionEvent, Service
+from services.estimativa_service import (
+    ProductionEstimate, duration_label, estimate_production, workdays_label,
+)
 from services.producao_service import (
     ACTIVE_PRODUCTION_STATUSES, CLOSED_PRODUCTION_STATUSES,
-    finish_production, start_production,
+    finish_production, saved_estimate, start_production,
 )
 from utils.formatters import date_br, datetime_br, decimal_br, money_br
 
@@ -81,6 +85,17 @@ def _rows(session, orders):
     services = defaultdict(list)
     for item in session.scalars(select(Service).where(Service.pedido_id.in_(ids))):
         services[item.pedido_id].append(item)
+    estimates = {}
+    for entity_id, raw_value in session.execute(select(
+        Audit.entity_id, Audit.new_value,
+    ).where(
+        Audit.entity == "pedidos", Audit.field == "estimativa_producao",
+        Audit.source == "PRODUCAO", Audit.entity_id.in_([str(order_id) for order_id in ids]),
+    ).order_by(Audit.at)):
+        try:
+            estimates[entity_id] = ProductionEstimate.from_snapshot(json.loads(raw_value))
+        except (KeyError, TypeError, ValueError):
+            continue
     events = defaultdict(dict)
     for event in session.scalars(select(ProductionEvent).where(
         ProductionEvent.pedido_id.in_(ids),
@@ -91,6 +106,7 @@ def _rows(session, orders):
     result = []
     for order in orders:
         work = services[order.id]
+        estimate = estimates.get(str(order.id)) or estimate_production(work)
         first = work[0] if work else None
         start = events[order.id].get("INICIAR_CORTE")
         finish = events[order.id].get("FINALIZAR_PRODUCAO")
@@ -128,6 +144,7 @@ def _rows(session, orders):
             "Fim producao": _event_time(finish),
             "Encerrado por": _responsible(finish),
             "Tempo producao": elapsed,
+            "Tempo estimado": duration_label(estimate.total_seconds) if estimate.total_seconds else "Sem medidas",
             "Status": _status_label(order.status_producao),
             "Observacoes": order.observacao_operacional,
         })
@@ -164,6 +181,26 @@ def _render_content(factory, user):
                                ), key="operation_selected_order")
     selected = by_id[selected_id]
     st.caption(f"Status atual: {_status_label(selected.status_producao)}")
+    with factory() as session:
+        selected_services = session.scalars(select(Service).where(
+            Service.pedido_id == selected.id)).all()
+        estimate = saved_estimate(session, selected.id) or estimate_production(selected_services)
+    if estimate.total_seconds:
+        st.markdown("#### Tempo estimado para este pedido")
+        cut_col, drill_col, edge_col, total_col = st.columns(4)
+        cut_col.metric("Corte", duration_label(estimate.cut_seconds),
+                       help=f"{decimal_br(estimate.cuts)} cortes · 3.200 em 16h")
+        drill_col.metric("Furação", duration_label(estimate.drilling_seconds),
+                         help=f"{decimal_br(estimate.drillings)} usinagens · 5.000 em 16h")
+        edge_col.metric("Fita", duration_label(estimate.edge_seconds),
+                        help=f"{decimal_br(estimate.edge_meters)} m · 1.800 m em 16h")
+        total_col.metric("Total estimado", duration_label(estimate.total_seconds))
+        stage_mode = "em sequência" if estimate.mode == "SEQUENCIAL" else "em paralelo"
+        st.caption(f"Equivale a {workdays_label(estimate.total_seconds)}. "
+                   "Furação usa a quantidade de usinagens da planilha. "
+                   f"O cálculo considera etapas {stage_mode} e não inclui filas ou paradas.")
+    else:
+        st.warning("Este pedido não tem quantidades de cortes, usinagens ou fita para estimar o tempo.")
     if user.role not in {"ADMIN", "GESTOR", "OPERADOR"}:
         return
     responsible = st.text_input("Quem está registrando?", placeholder="Seu nome",
@@ -215,7 +252,8 @@ def _render_content(factory, user):
                     raise ValueError("Pedido nao encontrado.")
                 start_production(session, order, user.id, user.role, chosen_at, responsible)
             st.session_state["operation_production_feedback"] = (
-                f"Produção do pedido {selected.codigo_interno} iniciada.")
+                f"Produção do pedido {selected.codigo_interno} iniciada. "
+                f"Tempo estimado: {duration_label(estimate.total_seconds) if estimate.total_seconds else 'sem medidas'}.")
             st.rerun()
         except (ValueError, PermissionError) as exc:
             st.error(str(exc))

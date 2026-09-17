@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from db.models import Audit, Base, Capacity, Order, ProductionEvent, Service
 from db.repositories.orders import search_orders
 from services.producao_service import (
-    durations, finish_production, plan_order, preview_plan, record_event,
+    durations, finish_production, plan_order, preview_plan, record_event, saved_estimate,
     set_status, start_production,
 )
 from ui.operation_grid import _rows
@@ -92,6 +92,10 @@ def test_manual_production_start_and_finish(tmp_path):
                       status_producao="AGUARDANDO_PROGRAMACAO")
         session.add(order)
         session.flush()
+        session.add(Service(pedido_id=order.id, codigo_servico="S100",
+                            codigo_servico_normalizado="S100", cortes=Decimal("200"),
+                            usinagens=Decimal("1000"), fita_aplicada=Decimal("112.5")))
+        session.flush()
         with pytest.raises(PermissionError):
             start_production(session, order, None, "CONSULTA", chosen, "Ana")
         with pytest.raises(ValueError, match="futuro"):
@@ -101,6 +105,7 @@ def test_manual_production_start_and_finish(tmp_path):
         assert started.at == chosen.astimezone(timezone.utc)
         assert started.observation == "Responsavel: Ana"
         assert order.status_producao == "EM_CORTE"
+        assert saved_estimate(session, order.id).total_seconds == 18720
         with pytest.raises(ValueError, match="ja esta em producao"):
             start_production(session, order, None, "OPERADOR", chosen, "Ana")
     with Session(engine) as session, session.begin():
@@ -118,4 +123,5 @@ def test_manual_production_start_and_finish(tmp_path):
         assert row["Inicio producao"] == "16/09/2026 14:30"
         assert row["Iniciado por"] == "Ana"
         assert row["Encerrado por"] == "Bruno"
+        assert row["Tempo estimado"] == "5h 12min"
         assert row["Status"] == "PRODUCAO FINALIZADA"

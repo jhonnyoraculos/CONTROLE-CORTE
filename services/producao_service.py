@@ -1,6 +1,7 @@
 """Production planning, events, durations and capacity checks."""
 
 import uuid
+import json
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 from config.constants import PROCESS_EVENTS
 from db.models import Audit, Capacity, Order, ProductionEvent, Service, StatusHistory, now
 from services.auth_service import require_role
+from services.estimativa_service import ProductionEstimate, estimate_production
 from services.pedido_service import order_totals
 from services.status_flow import get_flow, get_statuses
 from utils.logging import log_event
@@ -17,6 +19,31 @@ from utils.logging import log_event
 
 METRIC_FIELDS = {"chapas": "chapas", "cortes": "cortes", "metros_corte": "metros_lineares_corte",
                  "fita": "fita_aplicada", "usinagens": "usinagens"}
+
+
+def _save_estimate(session: Session, order: Order, user_id, start_at: datetime) -> None:
+    estimate = estimate_production(order.services)
+    if not estimate.total_seconds:
+        return
+    payload = estimate.snapshot()
+    payload["start_at"] = start_at.isoformat()
+    session.add(Audit(user_id=user_id, entity="pedidos", entity_id=str(order.id),
+                      field="estimativa_producao", old_value=None,
+                      new_value=json.dumps(payload, ensure_ascii=False),
+                      source="PRODUCAO", action="ESTIMATE_CREATED"))
+
+
+def saved_estimate(session: Session, order_id) -> ProductionEstimate | None:
+    value = session.scalar(select(Audit.new_value).where(
+        Audit.entity == "pedidos", Audit.entity_id == str(order_id),
+        Audit.field == "estimativa_producao", Audit.source == "PRODUCAO",
+    ).order_by(Audit.at.desc()).limit(1))
+    if not value:
+        return None
+    try:
+        return ProductionEstimate.from_snapshot(json.loads(value))
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _status(session: Session, order: Order, new: str, user_id, source: str) -> None:
@@ -103,6 +130,8 @@ def record_event(session: Session, order: Order, event_type: str, user_id,
     event = ProductionEvent(pedido_id=order.id, type=event_type, at=now(), user_id=user_id,
                             machine_id=machine_id or order.maquina_id, observation=observation)
     session.add(event)
+    if event_type == "INICIAR_CORTE":
+        _save_estimate(session, order, user_id, event.at)
     _status(session, order, flow[event_type]["to"], user_id, "PRODUCAO")
     log_event("PRODUCTION_FINISHED" if event_type == "FINALIZAR_PRODUCAO" else
               "PRODUCTION_STARTED" if event_type == "INICIAR_CORTE" else
@@ -137,6 +166,7 @@ def start_production(session: Session, order: Order, user_id, role: str,
                             user_id=user_id, machine_id=order.maquina_id,
                             observation=f"Responsavel: {responsible.strip()}" if responsible.strip() else None)
     session.add(event)
+    _save_estimate(session, order, user_id, start)
     _status(session, order, "EM_CORTE", user_id, "PRODUCAO")
     log_event("PRODUCTION_STARTED", user_id=user_id, order_id=order.id)
     return event

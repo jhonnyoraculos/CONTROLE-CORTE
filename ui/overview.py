@@ -133,7 +133,8 @@ def render(factory, user):
     with factory() as session:
         data = _overview_data(session, today)
         production_rows = [{key: row[key] for key in (
-            "Pedido", "Cliente", "Cidade", "Inicio producao", "Iniciado por", "Status",
+            "Pedido", "Cliente", "Cidade", "Inicio producao", "Tempo estimado",
+            "Iniciado por", "Status",
         )} for row in _rows(session, data["production"])]
         waiting_rows = _brief_rows(data["waiting"])
         recent_rows = _brief_rows(data["recent"])
